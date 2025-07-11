@@ -186,18 +186,33 @@ static inline void yabai_proxy_end(struct table* windows, uint32_t wid, uint32_t
 }
 
 static void yabai_message(CFMachPortRef port, void* data, CFIndex size, void* context) {
+  
   if (size == sizeof(struct mach_message)) {
     struct mach_message* message = data;
-
+    uint32_t *fields = (uint32_t *)data;
+debug("[borders debug] fields[0]=%d fields[1]=%d fields[2]=%d fields[3]=%d\n",
+      fields[0], fields[1], fields[2], fields[3]);
     struct payload {
       uint32_t event;
       uint32_t count;
       uint32_t proxy_wid[512];
       uint32_t real_wid[512];
     };
-
+    struct stack_payload {
+      uint32_t event;
+      uint32_t count;
+      uint32_t window_id[512];
+      uint32_t stack_index[512];
+  };
+  struct stack_payload* stack_payload = message->descriptor.address;
+    struct payload* payload = message->descriptor.address;
+    
     if (message->descriptor.size == sizeof(struct payload)) {
-      struct payload* payload = message->descriptor.address;
+
+    debug("[borders debug] payload.event: %u\n", payload->event);
+    debug("[borders debug] payload.count: %u\n", payload->count);
+   
+    
       if (payload->event == 1325) {
         for (int i = 0; i < payload->count; i++) {
           yabai_proxy_begin(context,
@@ -211,6 +226,18 @@ static void yabai_message(CFMachPortRef port, void* data, CFIndex size, void* co
                           payload->real_wid[i]  );
         }
       }
+      if (stack_payload->event == 1337) {
+        for (int i = 0; i < stack_payload->count; i++) {
+            debug("[borders debug] STACK INDICATOR: window_id=%u stack_index=%u\n",
+                  stack_payload->window_id[i],
+                  stack_payload->stack_index[i]);
+                  struct border* border = table_find(context, &stack_payload->window_id[i]);
+                  if (border) {
+                    border->stack_index = stack_payload->stack_index[i];
+                    border_update(border, true);  // to trigger redraw with the new indicator
+                  }
+        }
+    }
     }
     mach_msg_destroy(&message->header);
   }

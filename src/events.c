@@ -1,21 +1,22 @@
 #include "events.h"
-#include "misc/extern.h"
-#include "windows.h"
 #include "border.h"
+#include "misc/extern.h"
 #include "misc/window.h"
+#include "windows.h"
 
 extern struct table g_windows;
 extern pid_t g_pid;
 
 #ifdef DEBUG
-static void dump_event(void* data, size_t data_length) {
+static void dump_event(void *data, size_t data_length) {
   for (int i = 0; i < data_length; i++) {
-    printf("%02x ", *((unsigned char*)data + i));
+    printf("%02x ", *((unsigned char *)data + i));
   }
   printf("\n");
 }
 
-static void event_watcher(uint32_t event, void* data, size_t data_length, void* context) {
+static void event_watcher(uint32_t event, void *data, size_t data_length,
+                          void *context) {
   static int count = 0;
   printf("(%d) Event: %d; Payload:\n", ++count, event);
   dump_event(data, data_length);
@@ -35,12 +36,14 @@ static bool is_own_window(int cid, uint32_t wid) {
   return pid == g_pid;
 }
 
-static void window_spawn_handler(uint32_t event, struct window_spawn_data* data, size_t _, int cid) {
-  struct table* windows = &g_windows;
+static void window_spawn_handler(uint32_t event, struct window_spawn_data *data,
+                                 size_t _, int cid) {
+  struct table *windows = &g_windows;
   uint32_t wid = data->wid;
   uint64_t sid = data->sid;
 
-  if (!wid || !sid || is_own_window(cid, wid)) return;
+  if (!wid || !sid || is_own_window(cid, wid))
+    return;
 
   if (event == EVENT_WINDOW_CREATE) {
     if (windows_window_create(windows, wid, sid)) {
@@ -55,11 +58,13 @@ static void window_spawn_handler(uint32_t event, struct window_spawn_data* data,
   }
 }
 
-static void window_modify_handler(uint32_t event, uint32_t* window_id, size_t _, int cid) {
+static void window_modify_handler(uint32_t event, uint32_t *window_id, size_t _,
+                                  int cid) {
   uint32_t wid = *window_id;
-  struct table* windows = &g_windows;
+  struct table *windows = &g_windows;
 
-  if (is_own_window(cid, wid)) return;
+  if (is_own_window(cid, wid))
+    return;
 
   if (event == EVENT_WINDOW_MOVE) {
     debug("Window Move: %d\n", wid);
@@ -70,17 +75,15 @@ static void window_modify_handler(uint32_t event, uint32_t* window_id, size_t _,
   } else if (event == EVENT_WINDOW_REORDER) {
     debug("Window Reorder (and focus): %d\n", wid);
     windows_window_update(windows, wid);
-    DELAY_ASYNC_EXEC_ON_MAIN_THREAD(10000, {
-      windows_determine_and_focus_active_window(windows);
-    });
+    DELAY_ASYNC_EXEC_ON_MAIN_THREAD(
+        10000, { windows_determine_and_focus_active_window(windows); });
   } else if (event == EVENT_WINDOW_LEVEL) {
     debug("Window Level: %d\n", wid);
     windows_window_update(windows, wid);
   } else if (event == EVENT_WINDOW_TITLE || event == EVENT_WINDOW_UPDATE) {
     debug("Window Focus\n");
-    DELAY_ASYNC_EXEC_ON_MAIN_THREAD(50000, {
-      windows_determine_and_focus_active_window(windows);
-    });
+    DELAY_ASYNC_EXEC_ON_MAIN_THREAD(
+        50000, { windows_determine_and_focus_active_window(windows); });
   } else if (event == EVENT_WINDOW_UNHIDE) {
     debug("Window Unhide: %d\n", wid);
     windows_window_unhide(windows, wid);
@@ -95,20 +98,18 @@ static void window_modify_handler(uint32_t event, uint32_t* window_id, size_t _,
 
 static void front_app_handler() {
   debug("Window Focus\n");
-  DELAY_ASYNC_EXEC_ON_MAIN_THREAD(50000, {
-    windows_determine_and_focus_active_window(&g_windows);
-  });
+  DELAY_ASYNC_EXEC_ON_MAIN_THREAD(
+      50000, { windows_determine_and_focus_active_window(&g_windows); });
 }
 
 static void space_handler() {
   // Not all native-fullscreen windows have yet updated their space id...
-  DELAY_ASYNC_EXEC_ON_MAIN_THREAD(20000, {
-    windows_draw_borders_on_current_spaces(&g_windows);
-  });
+  DELAY_ASYNC_EXEC_ON_MAIN_THREAD(
+      20000, { windows_draw_borders_on_current_spaces(&g_windows); });
 }
 
 void events_register(int cid) {
-  void* cid_ctx = (void*)(intptr_t)cid;
+  void *cid_ctx = (void *)(intptr_t)cid;
 
   SLSRegisterNotifyProc(window_modify_handler, EVENT_WINDOW_CLOSE, cid_ctx);
   SLSRegisterNotifyProc(window_modify_handler, EVENT_WINDOW_MOVE, cid_ctx);
@@ -121,6 +122,10 @@ void events_register(int cid) {
   SLSRegisterNotifyProc(window_modify_handler, EVENT_WINDOW_UPDATE, cid_ctx);
   SLSRegisterNotifyProc(window_spawn_handler, EVENT_WINDOW_CREATE, cid_ctx);
   SLSRegisterNotifyProc(window_spawn_handler, EVENT_WINDOW_DESTROY, cid_ctx);
+
+  // SLSRegisterNotifyProc(window_modify_handler, EVENT_WINDOW_STACK, cid_ctx);
+  // SLSRegisterNotifyProc(window_modify_handler, EVENT_WINDOW_UNSTACK,
+  // cid_ctx);
 
   SLSRegisterNotifyProc(space_handler, EVENT_SPACE_CHANGE, cid_ctx);
 

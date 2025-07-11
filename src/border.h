@@ -80,9 +80,13 @@ struct border {
   volatile uint32_t external_proxy_wid;
 
   struct settings setting_override;
+
+  int stack_index;
+    struct border *stack_indicator_overlay;
 };
 
 struct border* border_create();
+void border_init(struct border *border, int cid);
 void border_destroy(struct border* border);
 
 void border_move(struct border* border);

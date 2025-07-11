@@ -19,7 +19,10 @@ static inline void drawing_set_fill(CGContextRef context, uint32_t color) {
   colors_from_hex(color, &a, &r, &g, &b);
   CGContextSetRGBFillColor(context, r, g, b, a);
 }
-
+static inline void drawing_draw_filled_circle(CGContextRef context, CGRect rect, uint32_t color) {
+  drawing_set_fill(context, color);
+  CGContextFillEllipseInRect(context, rect);
+}
 static inline void drawing_set_stroke(CGContextRef context, uint32_t color) {
   float a,r,g,b;
   colors_from_hex(color, &a, &r, &g, &b);
