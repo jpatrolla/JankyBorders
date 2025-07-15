@@ -1,5 +1,5 @@
-FILES = src/main.c src/parse.c src/mach.c src/hashtable.c src/events.c src/windows.c src/border.c src/animation.c 
-LIBS = -framework AppKit -framework CoreVideo -F/System/Library/PrivateFrameworks/ -framework SkyLight
+FILES = src/main.c src/parse.c src/mach.c src/hashtable.c src/events.c src/windows.c src/yb_props.c src/sidebar.c src/border.c src/animation.c 
+LIBS = -framework AppKit -framework CoreVideo -F/System/Library/PrivateFrameworks/ -framework SkyLight -Wl,-U,_SLSGetWindowContext
 
 all: | bin
 	clang -std=c99 -O3 -g $(FILES) -o bin/borders $(LIBS)

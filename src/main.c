@@ -1,13 +1,14 @@
 #include "border.h"
-#include "hashtable.h"
 #include "events.h"
-#include "misc/extern.h"
-#include "windows.h"
+#include "hashtable.h"
 #include "mach.h"
-#include "parse.h"
-#include "misc/connection.h"
 #include "misc/ax.h"
+#include "misc/connection.h"
+#include "misc/extern.h"
 #include "misc/yabai.h"
+#include "parse.h"
+#include "sidebar.h"
+#include "windows.h"
 #include <stdio.h>
 
 #define VERSION_OPT_LONG "--version"
@@ -22,59 +23,57 @@
 
 pid_t g_pid;
 mach_port_t g_server_port;
+
 struct table g_windows;
 struct mach_server g_mach_server;
-struct settings g_settings = { .enabled = true,
-                               .active_window = { .stype = COLOR_STYLE_SOLID,
-                                                  .color = 0xffe1e3e4 },
-                               .inactive_window = { .stype = COLOR_STYLE_SOLID,
-                                                    .color =  0x00000000 },
-                               .background = { .stype = COLOR_STYLE_SOLID,
-                                               .color = 0x00000000         },
-                               .border_width = 4.f,
-                               .blur_radius = 0,
-                               .border_style = BORDER_STYLE_ROUND,
-                               .hidpi = false,
-                               .show_background = false,
-                               .border_order = BORDER_ORDER_BELOW,
-                               .ax_focus = false,
-                               .blacklist_enabled = false,
-                               .whitelist_enabled = false                    };
-
-static TABLE_HASH_FUNC(hash_windows) {
-  return *(uint32_t *) key;
-}
+struct settings g_settings = {
+    .enabled = true,
+    .active_window = {.stype = COLOR_STYLE_SOLID, .color = 0xffe1e3e4},
+    .inactive_window = {.stype = COLOR_STYLE_SOLID, .color = 0x00000000},
+    .background = {.stype = COLOR_STYLE_SOLID, .color = 0x00000000},
+    .border_width = 4.f,
+    .blur_radius = 0,
+    .border_style = BORDER_STYLE_ROUND,
+    .hidpi = false,
+    .show_background = false,
+    .border_order = BORDER_ORDER_BELOW,
+    .ax_focus = false,
+    .blacklist_enabled = false,
+    .whitelist_enabled = false,
+    //.badges = {.pip = false, .sticky = false, .floating = false, .stack = false, .stack_index=0}
+};
+static TABLE_HASH_FUNC(hash_windows) { return *(uint32_t *)key; }
 
 static TABLE_COMPARE_FUNC(cmp_windows) {
-  return *(uint32_t *) key_a == *(uint32_t *) key_b;
+  return *(uint32_t *)key_a == *(uint32_t *)key_b;
 }
 
 static TABLE_HASH_FUNC(hash_blacklist) {
   // djb2 by Dan Bernstein
   unsigned long hash = 5381;
   char c;
-  while((c = *((char*)key++))) {
+  while ((c = *((char *)key++))) {
     hash = ((hash << 5) + hash) + c;
   }
   return hash;
 }
 
 static TABLE_COMPARE_FUNC(cmp_blacklist) {
-  return strcmp((char*)key_a, (char*)key_b) == 0;
+  return strcmp((char *)key_a, (char *)key_b) == 0;
 }
 
-static void message_handler(void* data, uint32_t len) {
-  char* message = data;
+static void message_handler(void *data, uint32_t len) {
+  char *message = data;
   uint32_t update_mask = 0;
   struct settings settings = g_settings;
 
-  while(message && *message) {
+  while (message && *message) {
     update_mask |= parse_settings(&settings, 1, &message);
     message += strlen(message) + 1;
   }
 
   if (settings.apply_to > 0) {
-    struct border* border = table_find(&g_windows, &settings.apply_to);
+    struct border *border = table_find(&g_windows, &settings.apply_to);
     if (border) {
       border->setting_override = settings;
       border->setting_override.enabled = true;
@@ -85,23 +84,22 @@ static void message_handler(void* data, uint32_t len) {
   } else {
     g_settings = settings;
     for (int i = 0; i < g_windows.capacity; ++i) {
-      struct bucket* bucket = g_windows.buckets[i];
+      struct bucket *bucket = g_windows.buckets[i];
       while (bucket) {
         if (bucket->value) {
-          struct border* border = bucket->value;
+          struct border *border = bucket->value;
           if (border->setting_override.enabled) {
-            char* message = data;
+            char *message = data;
             uint32_t window_update_mask = 0;
-            while(message && *message) {
-              window_update_mask |= parse_settings(&border->setting_override,
-                                                   1,
-                                                   &message                  );
+            while (message && *message) {
+              window_update_mask |=
+                  parse_settings(&border->setting_override, 1, &message);
               message += strlen(message) + 1;
             }
 
-            if (window_update_mask
-                && !((update_mask & BORDER_UPDATE_MASK_ALL)
-                     || (update_mask & BORDER_UPDATE_MASK_RECREATE_ALL))) {
+            if (window_update_mask &&
+                !((update_mask & BORDER_UPDATE_MASK_ALL) ||
+                  (update_mask & BORDER_UPDATE_MASK_RECREATE_ALL))) {
               border->needs_redraw = true;
               border_update(border, true);
             }
@@ -123,7 +121,7 @@ static void message_handler(void* data, uint32_t len) {
   }
 }
 
-static void send_args_to_server(mach_port_t port, int argc, char** argv) {
+static void send_args_to_server(mach_port_t port, int argc, char **argv) {
   int message_length = argc;
   int argl[argc];
 
@@ -133,7 +131,7 @@ static void send_args_to_server(mach_port_t port, int argc, char** argv) {
   }
 
   char message[(sizeof(char) * message_length)];
-  char* temp = message;
+  char *temp = message;
 
   for (int i = 1; i < argc; i++) {
     memcpy(temp, argv[i], argl[i]);
@@ -145,25 +143,27 @@ static void send_args_to_server(mach_port_t port, int argc, char** argv) {
   mach_send_message(port, message, message_length);
 }
 
-static void event_callback(CFMachPortRef port, void* message, CFIndex size, void* context) {
+static void event_callback(CFMachPortRef port, void *message, CFIndex size,
+                           void *context) {
   int cid = SLSMainConnectionID();
   CGEventRef event = SLEventCreateNextEvent(cid);
-  if (!event) return;
+  if (!event)
+    return;
   do {
     CFRelease(event);
     event = SLEventCreateNextEvent(cid);
   } while (event);
 }
 
-int main(int argc, char** argv) {
-  if (argc > 1 && ((strcmp(argv[1], VERSION_OPT_LONG) == 0)
-                   || (strcmp(argv[1], VERSION_OPT_SHRT) == 0))) {
+int main(int argc, char **argv) {
+  if (argc > 1 && ((strcmp(argv[1], VERSION_OPT_LONG) == 0) ||
+                   (strcmp(argv[1], VERSION_OPT_SHRT) == 0))) {
     fprintf(stdout, "borders-v%d.%d.%d\n", MAJOR, MINOR, PATCH);
     exit(EXIT_SUCCESS);
   }
 
-  if (argc > 1 && ((strcmp(argv[1], HELP_OPT_LONG) == 0)
-                   || (strcmp(argv[1], HELP_OPT_SHRT) == 0))) {
+  if (argc > 1 && ((strcmp(argv[1], HELP_OPT_LONG) == 0) ||
+                   (strcmp(argv[1], HELP_OPT_SHRT) == 0))) {
     fprintf(stdout, "Refer to the man page for help: man borders\n");
     exit(EXIT_SUCCESS);
   }
@@ -171,6 +171,7 @@ int main(int argc, char** argv) {
   table_init(&g_settings.blacklist, 64, hash_blacklist, cmp_blacklist);
   table_init(&g_settings.whitelist, 64, hash_blacklist, cmp_blacklist);
   g_settings.ax_focus = ax_check_trust(true);
+  
 
   uint32_t update_mask = parse_settings(&g_settings, argc - 1, argv + 1);
   mach_port_t server_port = mach_get_bs_port(BS_NAME);
@@ -186,6 +187,8 @@ int main(int argc, char** argv) {
   pid_for_task(mach_task_self(), &g_pid);
   table_init(&g_windows, 1024, hash_windows, cmp_windows);
 
+  yabai_props_init();
+  yb_props_bootstrap(); 
   g_server_port = create_connection_server_port();
 
   int cid = SLSMainConnectionID();
@@ -194,16 +197,12 @@ int main(int argc, char** argv) {
   mach_port_t port;
   CGError err = SLSGetEventPort(cid, &port);
   if (err == kCGErrorSuccess) {
-    CFMachPortRef cf_mach_port = CFMachPortCreateWithPort(NULL,
-                                                          port,
-                                                          event_callback,
-                                                          NULL,
-                                                          false          );
+    CFMachPortRef cf_mach_port =
+        CFMachPortCreateWithPort(NULL, port, event_callback, NULL, false);
 
     _CFMachPortSetOptions(cf_mach_port, 0x40);
-    CFRunLoopSourceRef source = CFMachPortCreateRunLoopSource(NULL,
-                                                              cf_mach_port,
-                                                              0            );
+    CFRunLoopSourceRef source =
+        CFMachPortCreateRunLoopSource(NULL, cf_mach_port, 0);
 
     CFRunLoopAddSource(CFRunLoopGetCurrent(), source, kCFRunLoopDefaultMode);
     CFRelease(cf_mach_port);
@@ -211,13 +210,15 @@ int main(int argc, char** argv) {
   }
 
   windows_add_existing_windows(&g_windows);
-
+  sidebar_init();
   mach_server_begin(&g_mach_server, message_handler);
-  if (!update_mask) execute_config_file("borders", "bordersrc");
+  if (!update_mask)
+    execute_config_file("borders", "bordersrc");
 
-  #ifdef _YABAI_INTEGRATION
+#ifdef _YABAI_INTEGRATION
   yabai_register_mach_port(&g_windows);
-  #endif
+#endif
   CFRunLoopRun();
+  yabai_props_free();
   return 0;
 }

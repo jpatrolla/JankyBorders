@@ -61,6 +61,12 @@ struct border {
   bool needs_redraw;
   bool too_small;
   bool sticky;
+  bool is_floating;
+  bool is_sticky;
+  bool is_pip;
+  bool is_stack;
+  bool destroy_queued;
+  bool destroyed;
 
   uint64_t sid;
   uint32_t wid;

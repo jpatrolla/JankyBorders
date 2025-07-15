@@ -4,9 +4,23 @@
 #include "misc/ax.h"
 #include <libproc.h>
 #include <string.h>
-
+#include "misc/yabai.h"
 extern pid_t g_pid;
 extern struct settings g_settings;
+
+// Forward declaration for the window structure
+struct window;
+
+
+
+// Hash and comparison functions matching the table's expected signatures
+static unsigned long hash_wid(void *key) {
+    return *(uint32_t *)key;
+}
+
+static int compare_wid(void *a, void *b) {
+    return (*(uint32_t *)a == *(uint32_t *)b);   // 1 == equal, 0 == different
+}
 
 static bool window_in_list(struct table *list, char *app_name) {
   if (table_find(list, app_name))
@@ -25,6 +39,8 @@ static bool app_allowed(struct settings *settings, char *app_name) {
   }
   return true;
 }
+
+
 
 bool windows_window_create(struct table *windows, uint32_t wid, uint64_t sid) {
   bool window_created = false;
@@ -59,9 +75,9 @@ bool windows_window_create(struct table *windows, uint32_t wid, uint64_t sid) {
             window_created = true;
           }
 
-          border->target_wid = wid;
-          border->sid = sid;
-          border_update(border, false);
+            border->target_wid = wid;
+            border->sid = sid;
+            border_update(border, false);
           windows_update_notifications(windows);
         }
       }
@@ -76,12 +92,16 @@ bool windows_window_create(struct table *windows, uint32_t wid, uint64_t sid) {
 }
 
 static void windows_remove_all(struct table *windows) {
+  debug("WINDOWS REMOVE ALL? 🌼\n");
   for (int i = 0; i < windows->capacity; ++i) {
     struct bucket *bucket = windows->buckets[i];
     while (bucket) {
       if (bucket->value) {
         struct border *border = bucket->value;
-        border_destroy(border);
+        
+        if(border){
+          border_destroy(border);
+        };
       }
       bucket = bucket->next;
     }
@@ -96,12 +116,18 @@ void windows_recreate_all_borders(struct table *windows) {
 }
 
 void windows_update_all(struct table *windows) {
+  debug("WINDOWS UPDATE ALL? 🌼\n");
+    int cid = SLSMainConnectionID();
+  
+  
   for (int i = 0; i < windows->capacity; ++i) {
     struct bucket *bucket = windows->buckets[i];
     while (bucket) {
       if (bucket->value) {
         struct border *border = bucket->value;
         if (border) {
+          uint64_t tags = window_tags(cid, border->wid);
+          if (tags & WINDOW_TAG_STICKY) debug(" -> STICKY");
           border->needs_redraw = true;
           border_update(border, true);
         }
@@ -243,7 +269,9 @@ void windows_determine_and_focus_active_window(struct table *windows) {
 
 void windows_draw_borders_on_current_spaces(struct table *windows) {
   debug("Space Change: Consistency check\n");
+
   int cid = SLSMainConnectionID();
+  
   CFArrayRef displays = SLSCopyManagedDisplays(cid);
   uint32_t space_count = CFArrayGetCount(displays);
   uint64_t space_list[space_count];
@@ -260,25 +288,36 @@ void windows_draw_borders_on_current_spaces(struct table *windows) {
 
   uint64_t set_tags = 1;
   uint64_t clear_tags = 0;
-  CFArrayRef window_list = SLSCopyWindowsWithOptionsAndTags(
-      cid, 0, space_list_ref, 0x2, &set_tags, &clear_tags);
+
+  CFArrayRef window_list = SLSCopyWindowsWithOptionsAndTags(cid, 0, space_list_ref, 0x2, &set_tags, &clear_tags);
 
   if (window_list) {
+    
     CFTypeRef query = SLSWindowQueryWindows(cid, window_list, 0x0);
     if (query) {
       CFTypeRef iterator = SLSWindowQueryResultCopyWindows(query);
       if (iterator) {
+        
         while (SLSWindowIteratorAdvance(iterator)) {
-          if (window_suitable(iterator)) {
-            uint32_t wid = SLSWindowIteratorGetWindowID(iterator);
-            struct border *border = table_find(windows, &wid);
-            if (border)
-              border_update(border, true);
-            else {
-              debug("Creating Missing Window: %d\n", wid);
-              windows_window_create(windows, wid, window_space_id(cid, wid));
+            if (window_suitable(iterator)) {
+                uint32_t wid = SLSWindowIteratorGetWindowID(iterator);
+                yb_props_t *prop = table_find(&yb_props, &wid);
+                bool is_floater  = prop && prop->is_floating;
+                struct border *border = table_find(windows, &wid);
+                uint64_t tags = window_tags(cid, wid);
+
+                bool created = windows_window_create(windows, wid, window_space_id(cid, wid));
+                border = table_find(windows, &wid);
+
+                if (border && is_floater) {
+                    border->is_floating = true;
+                    border->needs_redraw = true;
+                    debug("Marked window %d as floating on space change\n", wid);
+                }
+                if (border && created) {
+                    border_update(border, true);
+                }
             }
-          }
         }
         CFRelease(iterator);
       }
@@ -290,8 +329,10 @@ void windows_draw_borders_on_current_spaces(struct table *windows) {
 }
 
 void windows_add_existing_windows(struct table *windows) {
-  int cid = SLSMainConnectionID();
-  uint64_t *space_list = NULL;
+    int cid = SLSMainConnectionID();
+    CFArrayRef displays = SLSCopyManagedDisplaySpaces(cid);
+
+    uint64_t *space_list = NULL;
   int space_count = 0;
 
   CFArrayRef display_spaces_ref = SLSCopyManagedDisplaySpaces(cid);
@@ -312,11 +353,11 @@ void windows_add_existing_windows(struct table *windows) {
         CFNumberRef sid_ref = CFDictionaryGetValue(space_ref, CFSTR("id64"));
         CFNumberGetValue(sid_ref, CFNumberGetType(sid_ref),
                          space_list + space_count + j);
-      }
+            }
       space_count += spaces_count;
-    }
+        }
     CFRelease(display_spaces_ref);
-  }
+    }
 
   uint64_t set_tags = 1;
   uint64_t clear_tags = 0;
@@ -339,14 +380,14 @@ void windows_add_existing_windows(struct table *windows) {
         }
       }
 
-      windows_update_notifications(windows);
-      CFRelease(query);
+        windows_update_notifications(windows);
+        CFRelease(query);
       CFRelease(iterator);
     }
     CFRelease(window_list_ref);
   }
   CFRelease(space_list_ref);
-  free(space_list);
+    free(space_list);
 }
 
 // windows_get_hidden_windows

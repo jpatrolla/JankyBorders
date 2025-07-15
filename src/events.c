@@ -93,7 +93,16 @@ static void window_modify_handler(uint32_t event, uint32_t *window_id, size_t _,
   } else if (event == EVENT_WINDOW_CLOSE) {
     debug("Window Close: %d\n", wid);
     windows_window_destroy(windows, wid, 0);
-  }
+  } else if(event == EVENT_WINDOW_FLOAT) {
+      debug("[WINDOW FLOATED] Window %d tags: 0x%llx \n", wid, window_tags(cid, wid));
+  } 
+  //else if(event == EVENT_WINDOW_STICKY) {
+    
+  //} else if(event == EVENT_WINDOW_STACK) {
+  
+  //} else if(event == EVENT_WINDOW_PIP) {
+
+  //}
 }
 
 static void front_app_handler() {
@@ -122,11 +131,6 @@ void events_register(int cid) {
   SLSRegisterNotifyProc(window_modify_handler, EVENT_WINDOW_UPDATE, cid_ctx);
   SLSRegisterNotifyProc(window_spawn_handler, EVENT_WINDOW_CREATE, cid_ctx);
   SLSRegisterNotifyProc(window_spawn_handler, EVENT_WINDOW_DESTROY, cid_ctx);
-
-  // SLSRegisterNotifyProc(window_modify_handler, EVENT_WINDOW_STACK, cid_ctx);
-  // SLSRegisterNotifyProc(window_modify_handler, EVENT_WINDOW_UNSTACK,
-  // cid_ctx);
-
   SLSRegisterNotifyProc(space_handler, EVENT_SPACE_CHANGE, cid_ctx);
 
   SLSRegisterNotifyProc(front_app_handler, EVENT_FRONT_CHANGE, cid_ctx);

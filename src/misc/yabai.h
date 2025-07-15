@@ -21,6 +21,18 @@ struct track_transform_payload {
   CGAffineTransform initial_transform;
 };
 
+typedef struct yb_props {
+    bool is_floating;
+    bool is_stacked;
+    bool is_sticky;
+    bool is_pip;
+} yb_props_t;
+extern struct table yb_props;
+void yabai_props_init(void);
+void yabai_props_free(void);
+void yb_props_bootstrap(void);
+yb_props_t *yb_props_get(uint32_t wid, bool create_if_missing);
+static inline void yb_props_refresh_flags(void) { yb_props_bootstrap(); }
 struct yabai_proxy_payload {
   union { struct border* proxy; struct border* border; };
   struct settings settings;
@@ -168,7 +180,7 @@ static inline void yabai_proxy_end(struct table* windows, uint32_t wid, uint32_t
       SLSTransactionCommit(transaction, 0);
       CFRelease(transaction);
     }
-
+    debug("destroy proxy\n");
     border_destroy(proxy);
 
     struct yabai_proxy_payload* payload
@@ -190,35 +202,39 @@ static void yabai_message(CFMachPortRef port, void* data, CFIndex size, void* co
   if (size == sizeof(struct mach_message)) {
     struct mach_message* message = data;
     uint32_t *fields = (uint32_t *)data;
-debug("[borders debug] fields[0]=%d fields[1]=%d fields[2]=%d fields[3]=%d\n",
-      fields[0], fields[1], fields[2], fields[3]);
+    
     struct payload {
       uint32_t event;
       uint32_t count;
       uint32_t proxy_wid[512];
       uint32_t real_wid[512];
     };
-    struct stack_payload {
+    struct yb_payload {
       uint32_t event;
       uint32_t count;
       uint32_t window_id[512];
-      uint32_t stack_index[512];
+      uint32_t data[512];
   };
-  struct stack_payload* stack_payload = message->descriptor.address;
+  struct yb_payload* yb_payload = message->descriptor.address;
     struct payload* payload = message->descriptor.address;
-    
-    if (message->descriptor.size == sizeof(struct payload)) {
+    //debug("[borders debug] payload.event: %u\n", yb_payload->event);
 
-    debug("[borders debug] payload.event: %u\n", payload->event);
-    debug("[borders debug] payload.count: %u\n", payload->count);
-   
-    
-      if (payload->event == 1325) {
+    debug("[borders debug] payload.count: %u\n", yb_payload->count);
+    for (int i = 0; i < yb_payload->count; i++) {
+        debug("[borders debug] window_id: %u data: %u, event: %u \n",
+            yb_payload->window_id[i], yb_payload->data[i], yb_payload->event);
+    }
+    if (message->descriptor.size == sizeof(struct payload)) {
+    //debug("[borders debug] payload received at: %p\n", (void*)yb_payload);
+    //debug("[borders debug] payload receoved: %u\n", yb_payload);
+    //debug("[borders debug] payload->data: %u\n", yb_payload->data);
+     if (payload->event == 1325) {
         for (int i = 0; i < payload->count; i++) {
           yabai_proxy_begin(context,
                             payload->proxy_wid[i],
                             payload->real_wid[i]  );
         }
+        //animation
       } else if (payload->event == 1326) {
         for (int i = 0; i < payload->count; i++) {
           yabai_proxy_end(context,
@@ -226,16 +242,54 @@ debug("[borders debug] fields[0]=%d fields[1]=%d fields[2]=%d fields[3]=%d\n",
                           payload->real_wid[i]  );
         }
       }
-      if (stack_payload->event == 1337) {
-        for (int i = 0; i < stack_payload->count; i++) {
-            debug("[borders debug] STACK INDICATOR: window_id=%u stack_index=%u\n",
-                  stack_payload->window_id[i],
-                  stack_payload->stack_index[i]);
-                  struct border* border = table_find(context, &stack_payload->window_id[i]);
-                  if (border) {
-                    border->stack_index = stack_payload->stack_index[i];
-                    border_update(border, true);  // to trigger redraw with the new indicator
-                  }
+    int cid = SLSMainConnectionID();
+    for (int i = 0; i < yb_payload->count; i++) {
+      struct border* border = table_find(context, &yb_payload->window_id[i]);
+   
+      // animation
+     
+      //sticky
+      if (yb_payload->event == 1008) {
+        if(border){
+              pthread_mutex_lock(&border->mutex);
+              border->is_sticky = yb_payload->data[i];
+              yb_props_t *p = yb_props_get(yb_payload->window_id[i], true);
+              p->is_sticky = yb_payload->data[i];
+              border_update(border, true);  
+              pthread_mutex_unlock(&border->mutex);
+              debug("[badges debug] border updated is_sticky %d\n", border->is_sticky);
+          }
+      }//pip
+      else if (yb_payload->event == 1117) {
+              yb_props_t *p = yb_props_get(yb_payload->window_id[i], true);
+              p->is_pip = yb_payload->data[i];
+      }//float
+      else if (yb_payload->event == 1227) {
+        //get border 
+            if(border){
+              pthread_mutex_lock(&border->mutex);
+              border->is_floating = yb_payload->data[i];
+              yb_props_t *p = yb_props_get(yb_payload->window_id[i], true);
+              p->is_floating = yb_payload->data[i];
+              //border->needs_redraw=true;
+              border_update(border, true);  // triggers redraw
+              pthread_mutex_unlock(&border->mutex);
+              debug("[badges debug] border updated %d\n", border->is_floating);
+          }
+          //We can't use the current flags border has inside windows.h - they look like they're for discerning internal API flags and not yabai's flags.
+          //debug("[WINDOW FLOATED] Window %d tags: 0x%llx \n", yb_payload->window_id, window_tags(cid, yb_payload->window_id[i]));
+      }
+            
+        
+      }//stack
+      if (yb_payload->event == 1337) {
+        for (int i = 0; i < yb_payload->count; i++) {
+            debug("[badges debug] STACK INDICATOR: window_id=%u stack_index=%u\n",
+              yb_payload->window_id[i],
+              yb_payload->data[i]);
+              yb_props_t *p = yb_props_get(yb_payload->window_id[i], true);
+              p->is_stacked = yb_payload->data[i] != 0;
+              struct window* window = table_find(context, &yb_payload->window_id[i]);         
         }
     }
     }

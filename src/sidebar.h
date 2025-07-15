@@ -1,0 +1,1 @@
+void sidebar_init(void);

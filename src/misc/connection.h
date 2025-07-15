@@ -1,7 +1,7 @@
 #include "extern.h"
 #include <mach/mach.h>
 
-mach_port_t create_connection_server_port() {
+static inline mach_port_t create_connection_server_port(void) {
   #pragma pack(push,2)
   struct {
     mach_msg_header_t header;

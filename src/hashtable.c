@@ -18,6 +18,9 @@ void table_free(struct table *table) {
     while (bucket) {
       next = bucket->next;
       free(bucket->key);
+      if (bucket->value) {
+        free(bucket->value);
+      };
       free(bucket);
       bucket = next;
     }
@@ -102,6 +105,9 @@ void table_remove(struct table* table, void* key) {
   struct bucket *next, **bucket = table_get_bucket(table, key);
   if (*bucket) {
     free((*bucket)->key);
+    if ((*bucket)->value) {
+      free((*bucket)->value);
+    }
     next = (*bucket)->next;
     free(*bucket);
     *bucket = next;

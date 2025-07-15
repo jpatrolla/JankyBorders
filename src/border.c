@@ -13,13 +13,26 @@ struct settings *border_get_settings(struct border *border) {
                                           : &g_settings;
 }
 
-static void border_destroy_window(struct border *border) {
-  if (border->context)
-    CGContextRelease(border->context);
-  if (border->wid)
-    SLSReleaseWindow(border->cid, border->wid);
-  border->wid = 0;
-  border->context = NULL;
+static void border_destroy_window(struct border *border)
+{
+    if (!border) return;
+
+    /* CoreGraphics context */
+    if (border->context) {
+        CGContextRef ctx = border->context;
+        border->context  = NULL;        /* prevent re-release */
+        CGContextRelease(ctx);
+    }
+
+    /* SLS window */
+    if (border->wid &&
+        border->cid != 0 &&
+        border->cid != SLSMainConnectionID())
+    {
+        uint32_t wid = border->wid;
+        border->wid  = 0;               /* mark consumed */
+        SLSReleaseWindow(border->cid, wid);
+    }
 }
 
 static bool border_check_too_small(struct border *border, CGRect window_frame) {
@@ -106,10 +119,19 @@ static bool border_calculate_bounds(struct border *border, CGRect *frame,
 
 static void border_draw(struct border *border, CGRect frame,
                         struct settings *settings) {
+
   CGContextSaveGState(border->context);
   border->needs_redraw = false;
-  struct color_style color_style =
-      border->focused ? settings->active_window : settings->inactive_window;
+  //struct color_style color_style =
+  //    border->focused ? settings->active_window : settings->inactive_window;
+  struct color_style color_style;
+  if (border->is_floating) {
+    debug("BORDER IS FLOATING: 💛💛💛💛💛\n");
+    color_style.stype = COLOR_STYLE_SOLID;
+    color_style.color = 0xffffff00; // yellow
+  } else {
+    color_style = border->focused ? settings->active_window : settings->inactive_window;
+  }
 
   CGGradientRef gradient = NULL;
   CGPoint gradient_dir[2];
@@ -205,6 +227,7 @@ void border_create_window(struct border *border, CGRect frame, bool unmanaged,
 }
 
 void border_update_internal(struct border *border, struct settings *settings) {
+  debug("[BADGES DEBUG] border_update_internal\n");
   if (border->external_proxy_wid)
     return;
 
@@ -229,11 +252,13 @@ void border_update_internal(struct border *border, struct settings *settings) {
   int sub_level = window_sub_level(border->target_wid);
 
   if (!border->wid) {
+    debug("[BADGES DEBUG] !border->wid, creating window\n");
     border_create_window(border, frame, border->is_proxy, settings->hidpi);
   }
 
   bool disabled_update = false;
   if (!CGRectEqualToRect(frame, border->frame)) {
+    debug("!CGRectEqualToRect(frame, border->frame) ❤️ \n");
     CFTypeRef transaction = SLSTransactionCreate(cid);
     if (!transaction)
       return;
@@ -253,16 +278,19 @@ void border_update_internal(struct border *border, struct settings *settings) {
     SLSTransactionCommit(transaction, 0);
     CFRelease(transaction);
   }
+    debug("[BADGES DEBUG] NEEDS REDRAW @ border_update_internal");
 
-  if (border->needs_redraw)
-    border_draw(border, frame, settings);
+  if (border && border->needs_redraw){
+    debug("[BADGES DEBUG] NEEDS REDRAW @ border_update_internal");
+    border_draw(border, frame, settings);};
 
   CFTypeRef transaction = SLSTransactionCreate(cid);
   if (!transaction)
     return;
   SLSTransactionMoveWindowWithGroup(transaction, border->wid, border->origin);
 
-  if (!border->is_proxy) {
+  if (border && !border->is_proxy) {
+    debug("CGAffineTransform transform = CGAffineTransformIdentity;");
     CGAffineTransform transform = CGAffineTransformIdentity;
     transform.tx = -border->origin.x;
     transform.ty = -border->origin.y;
@@ -279,7 +307,8 @@ void border_update_internal(struct border *border, struct settings *settings) {
   uint64_t set_tags = (1ULL << 1) | (1ULL << 9);
   uint64_t clear_tags = 0;
 
-  if (border->sticky) {
+  if (border && border->sticky) {
+    debug("border->sticky\n");
     set_tags |= WINDOW_TAG_STICKY;
     clear_tags |= (1ULL << 45);
   }
@@ -322,6 +351,8 @@ void border_update_internal(struct border *border, struct settings *settings) {
     // border_update_internal(border->stack_indicator_overlay, settings);
 
   } else if (border->stack_indicator_overlay) {
+    debug("border->stack_indicator_overlay");
+
     border_destroy(border->stack_indicator_overlay);
     border->stack_indicator_overlay = NULL;
   }
@@ -367,19 +398,44 @@ struct border *border_create() {
   return border;
 }
 
-void border_destroy(struct border *border) {
-  border_hide(border);
-  dispatch_async(dispatch_get_main_queue(), ^{
-    pthread_mutex_lock(&border->mutex);
-    border_destroy_window(border);
-    if (border->proxy)
-      border_destroy(border->proxy);
-    animation_stop(&border->animation);
-    if (!border->is_proxy && border->cid != SLSMainConnectionID())
-      SLSReleaseConnection(border->cid);
-    pthread_mutex_unlock(&border->mutex);
-    free(border);
-  });
+void border_destroy(struct border *border)
+{
+    /* ①  Return immediately if we’ve already queued a destroy */
+    if (border->destroy_queued) return;
+    border->destroy_queued = true;
+
+    border_hide(border);
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        /* ②  Second-level guard in case another async block sneaks in */
+        if (border->destroyed) return;
+        border->destroyed = true;
+
+        pthread_mutex_lock(&border->mutex);
+
+        /* ---- tear-down begins ---- */
+        border_destroy_window(border);
+
+        if (border->proxy) {
+            struct border *child = border->proxy;
+            border->proxy = NULL;          /* break link first */
+            border_destroy(child);
+        }
+
+        animation_stop(&border->animation);
+
+        if (!border->is_proxy &&
+            border->cid != 0 &&
+            border->cid != SLSMainConnectionID())
+        {
+            SLSReleaseConnection(border->cid);
+            border->cid = 0;
+        }
+
+        pthread_mutex_unlock(&border->mutex);
+        debug("border_destroy: cid=%d is_proxy=%d\n", border->cid, border->is_proxy);
+        free(border);
+    });
 }
 
 void border_move(struct border *border) {
@@ -419,6 +475,7 @@ void border_update(struct border *border, bool try_async) {
   pthread_mutex_lock(&border->mutex);
   struct settings *settings = border_get_settings(border);
   if (!border->wid || !try_async) {
+    debug("[BADGES DEBUG] border_update -> border_update_internal\n");
     border_update_internal(border, settings);
     pthread_mutex_unlock(&border->mutex);
     return;

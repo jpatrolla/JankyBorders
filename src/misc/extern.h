@@ -21,8 +21,24 @@ extern CGError SLSReleaseConnection(int cid);
 extern CGError SLSWindowIsOrderedIn(int cid, uint32_t wid, bool* shown);
 extern CGError SLSGetWindowBounds(int cid, uint32_t wid, CGRect *frame);
 extern CGError CGSNewRegionWithRect(CGRect *rect, CFTypeRef *outRegion);
-extern CGError SLSNewWindow(int cid, int type, float x, float y, CFTypeRef region, uint32_t *wid);
-extern CGError SLSNewWindowWithOpaqueShapeAndContext(int cid, int type, CFTypeRef region, CFTypeRef opaque_shape, int options, uint64_t *tags, float x, float y, int tag_size, uint32_t *wid, void *context);
+extern CGError SLSNewWindow(
+	int cid, 
+	int type, 
+	float x, 
+	float y, 
+	CFTypeRef region, 
+	uint32_t *wid);
+extern CGError SLSNewWindowWithOpaqueShapeAndContext(int 
+	cid, int 
+	type, 
+	CFTypeRef region, 
+	CFTypeRef opaque_shape, 
+	int options, 
+	uint64_t *tags, 
+	float x, float y, 
+	int tag_size, 
+	uint32_t *wid, void *context);
+
 extern CGError SLSReleaseWindow(int cid, uint32_t wid);
 extern CGError SLSSetWindowTags(int cid, uint32_t wid, uint64_t* tags, int tag_size);
 extern CGError SLSClearWindowTags(int cid, uint32_t wid, uint64_t* tags, int tag_size);
@@ -36,7 +52,9 @@ extern CGError SLSGetWindowTransform(int cid, uint32_t wid, CGAffineTransform* t
 extern CGError SLSSetWindowTransform(int cid, uint32_t wid, CGAffineTransform transform);
 
 extern CGError SLSWindowSetShadowProperties(uint32_t wid, CFDictionaryRef properties);
+extern CGError SLSGetWindowContext(int cid, uint32_t wid, CGContextRef *out_ctx );
 extern CGError SLSGetWindowLevel(int cid, uint32_t wid, int64_t* level_out);
+extern CGError SLSSetWindowLevel(int cid, uint32_t wid, int64_t* level_out);
 extern uint64_t SLSGetWindowSubLevel(int cid, uint32_t wid);
 extern CGError SLSMoveWindowsToManagedSpace(int cid, CFArrayRef window_list, uint64_t sid);
 extern CGContextRef SLWindowContextCreate(int cid, uint32_t wid, CFDictionaryRef options);
@@ -80,3 +98,5 @@ extern uint64_t SLSManagedDisplayGetCurrentSpace(int cid, CFStringRef uuid);
 extern CFStringRef SLSCopyActiveMenuBarDisplayIdentifier(int cid);
 
 extern CGError SLSFlushWindowContentRegion(int cid, uint32_t wid, void* dirty);
+
+extern CGError SLSOrderWindow(int cid, uint32_t wid, int order_mode, uint32_t relative_to_wid);
