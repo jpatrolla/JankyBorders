@@ -7,6 +7,35 @@
 extern struct table g_windows;
 extern pid_t g_pid;
 
+/* ---------- IPC payload definitions (shared with Yabai) -------------- */
+struct yb_hdr {
+    uint32_t event;
+    uint32_t count;
+};
+
+/* Events 1325 / 1326  ─ proxy begin / end ------------------------------ */
+struct payload {
+    uint32_t event;
+    uint32_t count;
+    uint32_t proxy_wid[512];
+    uint32_t real_wid[512];
+};
+
+/* Event 1338  ─ bundled window‑flags ----------------------------------- */
+struct yb_flags {
+    uint8_t is_floating : 1;
+    uint8_t is_sticky   : 1;
+    uint8_t is_stacked  : 1;
+    uint8_t is_pip      : 1;
+};
+
+struct yb_flags_payload {
+    uint32_t event;
+    uint32_t count;
+    uint32_t window_id[512];
+    struct yb_flags flags[512];
+};
+
 #ifdef DEBUG
 static void dump_event(void *data, size_t data_length) {
   for (int i = 0; i < data_length; i++) {
@@ -93,16 +122,7 @@ static void window_modify_handler(uint32_t event, uint32_t *window_id, size_t _,
   } else if (event == EVENT_WINDOW_CLOSE) {
     debug("Window Close: %d\n", wid);
     windows_window_destroy(windows, wid, 0);
-  } else if(event == EVENT_WINDOW_FLOAT) {
-      debug("[WINDOW FLOATED] Window %d tags: 0x%llx \n", wid, window_tags(cid, wid));
-  } 
-  //else if(event == EVENT_WINDOW_STICKY) {
-    
-  //} else if(event == EVENT_WINDOW_STACK) {
-  
-  //} else if(event == EVENT_WINDOW_PIP) {
-
-  //}
+  }
 }
 
 static void front_app_handler() {

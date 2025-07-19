@@ -2,6 +2,7 @@
 #include "hashtable.h"
 #include "windows.h"
 #include <pthread.h>
+#include "misc/yabai.h"
 #include <time.h>
 
 extern struct settings g_settings;
@@ -48,6 +49,7 @@ static bool border_coalesce_resize_and_move_events(struct border *border,
                                                    CGRect *frame) {
   if (border->event_buffer.disable_coalescing || pthread_main_np() != 0 ||
       !border->wid) {
+    debug("Coalescing disabled or not on main thread or no window id\n");
     SLSGetWindowBounds(border->cid, border->target_wid, frame);
     return true;
   }
@@ -55,8 +57,9 @@ static bool border_coalesce_resize_and_move_events(struct border *border,
   int64_t dt = now - border->event_buffer.last_coalesce_attempt;
   border->event_buffer.last_coalesce_attempt = now;
 
-  if (border->event_buffer.is_coalescing)
-    return false;
+  if (border->event_buffer.is_coalescing){
+    debug("Coalescing is already in progress for border %d\n", border->cid);
+    return false;}
 
   CGRect window_frame;
   SLSGetWindowBounds(border->cid, border->target_wid, &window_frame);
@@ -68,11 +71,13 @@ static bool border_coalesce_resize_and_move_events(struct border *border,
        CGSizeEqualToSize(window_frame.size, border->target_bounds.size));
 
   if (coalesceable && dt > (1ULL << 27)) {
+    debug("Coalescing resize and move events for border %d\n", border->cid);
     border->event_buffer.is_coalescing = true;
     pthread_mutex_unlock(&border->mutex);
     usleep(20000);
     pthread_mutex_lock(&border->mutex);
     border->event_buffer.is_coalescing = false;
+    debug("Coalescing complete for border %d\n", border->cid);
     if (border->external_proxy_wid)
       return false;
     SLSGetWindowBounds(border->cid, border->target_wid, frame);
@@ -86,10 +91,17 @@ static bool border_coalesce_resize_and_move_events(struct border *border,
 static bool border_calculate_bounds(struct border *border, CGRect *frame,
                                     struct settings *settings) {
   CGRect window_frame;
-  if (border->is_proxy)
+  if (border->is_proxy){
     window_frame = border->target_bounds;
-  else if (!border_coalesce_resize_and_move_events(border, &window_frame)) {
+    debug("border_calculate_bounds > border->is_proxy > window frame is target bounds\n");
+  } else if (
+    !border_coalesce_resize_and_move_events(border, &window_frame)) {
     return false;
+  }
+  if (border->is_floating || border->is_sticky) {
+    // Expand drawing_bounds, not the actual window frame
+    //window_frame.origin.x -= 100.0;
+    //window_frame.size.width += 100.0;
   }
   border->target_bounds = window_frame;
 
@@ -102,8 +114,9 @@ static bool border_calculate_bounds(struct border *border, CGRect *frame,
   float border_offset = -settings->border_width - BORDER_PADDING;
   *frame = CGRectInset(window_frame, border_offset, border_offset);
 
+  
+  // adjust for indicators
   if (border->stack_index > 1) {
-
     frame->origin.x -= indicator_offset;
     frame->size.width += indicator_offset;
   }
@@ -112,6 +125,7 @@ static bool border_calculate_bounds(struct border *border, CGRect *frame,
   frame->origin = CGPointZero;
 
   window_frame.origin = (CGPoint){-border_offset, -border_offset};
+  
   border->drawing_bounds = window_frame;
 
   return true;
@@ -119,19 +133,27 @@ static bool border_calculate_bounds(struct border *border, CGRect *frame,
 
 static void border_draw(struct border *border, CGRect frame,
                         struct settings *settings) {
-
-  CGContextSaveGState(border->context);
-  border->needs_redraw = false;
-  //struct color_style color_style =
-  //    border->focused ? settings->active_window : settings->inactive_window;
+  debug("border_draw: cid=%d wid=%d\n", border->cid, border->wid);
   struct color_style color_style;
-  if (border->is_floating) {
-    debug("BORDER IS FLOATING: 💛💛💛💛💛\n");
-    color_style.stype = COLOR_STYLE_SOLID;
-    color_style.color = 0xffffff00; // yellow
+  color_style.stype = COLOR_STYLE_SOLID;
+  if(border->focused) {
+    if(border->is_floating){
+      color_style.color = 0xFF0A84FF;
+      // draw_floating_indicator(border);
+     } else {
+      color_style = settings->active_window;
+     }
   } else {
-    color_style = border->focused ? settings->active_window : settings->inactive_window;
+    color_style = settings->inactive_window;
   }
+
+  // if (border->is_floating) {
+  //   color_style.stype = COLOR_STYLE_SOLID;
+  //   color_style.color = 0xFF0A84FF; // macOS Blue;
+  //   draw_floating_indicator(border);
+  // } else {
+  //   color_style = border->focused ? settings->active_window : settings->inactive_window;
+  // }
 
   CGGradientRef gradient = NULL;
   CGPoint gradient_dir[2];
@@ -150,12 +172,7 @@ static void border_draw(struct border *border, CGRect frame,
   CGContextClearRect(border->context, frame);
 
   CGRect path_rect = border->drawing_bounds;
-  if (border->stack_index > 1) {
-    path_rect.origin.x +=
-        indicator_offset; // shift right by 10 to realign the left clip edge
-    path_rect.size.width += indicator_offset;
-  }
-
+  
   CGMutablePathRef inner_clip_path = CGPathCreateMutable();
   if (settings->border_style == BORDER_STYLE_SQUARE &&
       settings->border_order == BORDER_ORDER_ABOVE &&
@@ -204,14 +221,98 @@ static void border_draw(struct border *border, CGRect frame,
                                color_style.color);
     }
   }
+  if(border->is_floating || border->is_sticky){
+    draw_floating_indicator(border);
+  }
+  // CGContextSetRGBFillColor(border->context, 1, 0, 0, 1); // light red
+  // CGContextFillRect(border->context, frame);
   CFRelease(inner_clip_path);
+   
   CGContextFlush(border->context);
+  CGContextResetClip(border->context);
   CGContextRestoreGState(border->context);
   SLSFlushWindowContentRegion(border->cid, border->wid, NULL);
+ 
+
+}
+
+void draw_floating_indicator(struct border *border) {
+  // Indicators
+  debug("🌈draw_floating_indicator: cid=%d wid=%d\n", border->cid, border->wid);
+  if (!(border->is_floating || border->is_sticky)) return;
+  CGRect bounds = border->drawing_bounds;
+
+  CGContextSaveGState(border->context);
+  CGRect circleRect = CGRectMake(bounds.size.width, bounds.size.height, 16, 16);
+  if (border->is_floating || border->floating) {
+      CGContextSetRGBFillColor(border->context, 1.0, 1.0, 0.0, 1.0); // yellow
+      CGContextFillEllipseInRect(border->context, circleRect);
+  }
+    debug("🟦 draw_floating_indicator: wid=%d floating=%d bounds=(%.0f, %.0f, %.0f, %.0f)\n",
+          border->wid,
+          border->is_floating,
+          bounds.origin.x,
+          bounds.origin.y,
+          bounds.size.width,
+          bounds.size.height);
+  CGContextRestoreGState(border->context);
+}
+
+static void draw_stack_indicators(){
+  // placeholder for stack indicators
+
+  //if (border->stack_index > 1) {
+  //  path_rect.origin.x +=
+  //      indicator_offset; // shift right by 10 to realign the left clip edge
+  //  path_rect.size.width += indicator_offset;
+  //}
+  //// ⚠️ stack indicator WIP
+  //  if (border->stack_index > 1) {
+  //    CGContextSaveGState(border->context);
+  //    CGFloat indicator_offset = 50;
+  //    CGFloat indicator_size = 20;
+  //    CGFloat y = (frame.size.height / 2) - (indicator_size / 2);
+  //    drawing_draw_filled_circle(
+  //        border->context,
+  //    CGRectMake((indicator_offset / 2), y, indicator_size, indicator_size),
+  //    0xffff0000);
+  //    CGContextSetRGBFillColor(border->context, 1, 1, 1, 0.5);
+  //    CGContextFillRect(border->context,
+  //                      CGRectMake(0, 0, frame.size.width, frame.size.height));
+
+  //    // if (!border->stack_indicator_overlay) {
+  //    //   border->stack_indicator_overlay = malloc(sizeof(struct border));
+  //    //   border_init(border->stack_indicator_overlay, border->cid);
+  //    //   CGRect overlay_rect = CGRectMake(0, 0, 20, 20);
+  //    //   border_create_window(border->stack_indicator_overlay, overlay_rect,
+  //    //   true,
+  //    //                        false);
+  //    // }
+  //    // CGFloat dot_size = 6.0;
+  //    // CGFloat x = frame.size.width - dot_size - 3;
+  //    // CGFloat y = frame.size.height / 2 - dot_size / 2;
+
+  //    // CGContextSaveGState(border->context);
+  //    // drawing_set_fill(border->context, 0xffff0000);
+  //    // CGContextFillEllipseInRect(border->context,
+  //    //                            CGRectMake(x, y, dot_size, dot_size));
+  //    // CGContextRestoreGState(border->context);
+
+  //    // CGRect overlay_frame =
+  //    //     CGRectMake(border->target_bounds.origin.x - 5,
+  //    //                border->target_bounds.origin.y + 5, 20, 20);
+  //    // border->stack_indicator_overlay->target_bounds = overlay_frame;
+  //    // border_update_internal(border->stack_indicator_overlay, settings);
+
+  //  } else if (border->stack_indicator_overlay) {
+  //    border_destroy(border->stack_indicator_overlay);
+  //    border->stack_indicator_overlay = NULL;
+  //  }
 }
 
 void border_create_window(struct border *border, CGRect frame, bool unmanaged,
                           bool hidpi) {
+  debug("border_create_window: cid=%d wid=%d\n", border->cid, border->wid);
   pthread_mutex_lock(&border->mutex);
   int cid = border->cid;
   border->wid = window_create(cid, frame, hidpi, unmanaged);
@@ -227,20 +328,41 @@ void border_create_window(struct border *border, CGRect frame, bool unmanaged,
 }
 
 void border_update_internal(struct border *border, struct settings *settings) {
-  debug("[BADGES DEBUG] border_update_internal\n");
-  if (border->external_proxy_wid)
-    return;
+  debug("border_update_internal: cid=%d wid=%d\n", border->cid, border->wid);
+
+  if (border->external_proxy_wid){
+    debug("border_update_internalL extnernal proxy, exiting early\n");
+    return;}
 
   int cid = border->cid;
   CGRect frame;
-  if (!border_calculate_bounds(border, &frame, settings))
-    return;
+  if (!border_calculate_bounds(border, &frame, settings)){
+    debug("border_calculate_bounds failed, exiting early\n");
+    return;}
+  yb_props_t *prop = table_find(&yb_props, &border->target_wid);
+  yb_props_t *propswid = table_find(&yb_props, &border->wid);
 
+
+  if(propswid && propswid->is_floating){
+    debug("❤️propswid is not null, is_floating=%d\n", propswid->is_floating ? 1 : 0);
+  }
+    // debug("wid: is_floating=%d, target_wid: is_floating=%d\n",
+    //             wid->is_floating ? 1 : 0,
+    //             targetwid->is_floating ? 1 : 0);
   uint64_t tags = window_tags(cid, border->target_wid);
   border->sticky = tags & WINDOW_TAG_STICKY;
+  border->is_sticky = tags & WINDOW_TAG_STICKY;
+  border->floating = tags & WINDOW_TAG_FLOATING;
+  border->is_floating = prop && prop->is_floating;
+  border->attached = tags & WINDOW_TAG_ATTACHED;
+  border->modal = tags & WINDOW_TAG_MODAL; 
+  border->document = tags & WINDOW_TAG_DOCUMENT;
+  debug("💙 border->is_floating =%d\n", border->is_floating ? 1 : 0);
+  debug("🔥 wid =%d\n", border->wid);
+
   if (!border->sticky && !is_space_visible(cid, border->sid))
     return;
-
+  // if(border->is_floating ) draw_floating_indicator(border);
   bool shown = false;
   SLSWindowIsOrderedIn(cid, border->target_wid, &shown);
   if (!shown && !border->is_proxy) {
@@ -251,14 +373,12 @@ void border_update_internal(struct border *border, struct settings *settings) {
   int level = window_level(cid, border->target_wid);
   int sub_level = window_sub_level(border->target_wid);
 
-  if (!border->wid) {
-    debug("[BADGES DEBUG] !border->wid, creating window\n");
+  if (!border->wid)
     border_create_window(border, frame, border->is_proxy, settings->hidpi);
-  }
-
+  
   bool disabled_update = false;
   if (!CGRectEqualToRect(frame, border->frame)) {
-    debug("!CGRectEqualToRect(frame, border->frame) ❤️ \n");
+    debug("!CGRectEqualToRect");
     CFTypeRef transaction = SLSTransactionCreate(cid);
     if (!transaction)
       return;
@@ -266,11 +386,9 @@ void border_update_internal(struct border *border, struct settings *settings) {
     CFTypeRef frame_region;
     CGSNewRegionWithRect(&frame, &frame_region);
     SLSTransactionOrderWindow(transaction, border->wid, 0, border->target_wid);
-
     SLSTransactionSetWindowShape(transaction, border->wid, -9999, -9999,
                                  frame_region);
     CFRelease(frame_region);
-
     border->needs_redraw = true;
     border->frame = frame;
     disabled_update = true;
@@ -278,24 +396,25 @@ void border_update_internal(struct border *border, struct settings *settings) {
     SLSTransactionCommit(transaction, 0);
     CFRelease(transaction);
   }
-    debug("[BADGES DEBUG] NEEDS REDRAW @ border_update_internal");
 
-  if (border && border->needs_redraw){
-    debug("[BADGES DEBUG] NEEDS REDRAW @ border_update_internal");
-    border_draw(border, frame, settings);};
-
+  if (border->needs_redraw){
+    border_draw(border, frame, settings);
+  };
+  
   CFTypeRef transaction = SLSTransactionCreate(cid);
   if (!transaction)
     return;
-  SLSTransactionMoveWindowWithGroup(transaction, border->wid, border->origin);
+  debug("⭕Moved window %d to (%.0f, %.0f)\n",border->wid, border->origin.x, border->origin.y);
 
-  if (border && !border->is_proxy) {
-    debug("CGAffineTransform transform = CGAffineTransformIdentity;");
+  SLSTransactionMoveWindowWithGroup(transaction, border->wid, border->origin);
+  debug("🟡Moved window to (%.0f, %.0f)\n", border->origin.x, border->origin.y);
+  if (!border->is_proxy) {
     CGAffineTransform transform = CGAffineTransformIdentity;
     transform.tx = -border->origin.x;
     transform.ty = -border->origin.y;
     SLSTransactionSetWindowTransform(transaction, border->wid, 0, 0, transform);
   }
+    // draw_floating_indicator(border);
 
   SLSTransactionSetWindowLevel(transaction, border->wid, level);
   SLSTransactionSetWindowSubLevel(transaction, border->wid, sub_level);
@@ -306,65 +425,39 @@ void border_update_internal(struct border *border, struct settings *settings) {
 
   uint64_t set_tags = (1ULL << 1) | (1ULL << 9);
   uint64_t clear_tags = 0;
-
+  
+  CGContextSaveGState(border->context);
+  struct color_style color_style;
+  bool was_sticky = border->sticky;
+  
+  // if (border->is_floating) {
+  //   color_style.stype = COLOR_STYLE_SOLID;
+  //   color_style.color = 0xffffff00; // yellow
+  // } else {
+  //   color_style = border->focused ? settings->active_window : settings->inactive_window;
+  // }
+  // yb_props_t *prop = table_find(&yb_props, &border->wid);
+  // border->is_floating = prop && prop->is_floating;
   if (border && border->sticky) {
-    debug("border->sticky\n");
     set_tags |= WINDOW_TAG_STICKY;
     clear_tags |= (1ULL << 45);
   }
-  if (border->stack_index > 1) {
-    debug("BORDER HAS STACK...\n");
-    CGContextSaveGState(border->context);
-    CGFloat indicator_offset = 50;
-
-    CGFloat indicator_size = 20;
-    CGFloat y = (frame.size.height / 2) - (indicator_size / 2);
-    drawing_draw_filled_circle(
-        border->context,
-        CGRectMake((indicator_offset / 2), y, indicator_size, indicator_size),
-        0xffff0000);
-    CGContextSetRGBFillColor(border->context, 1, 1, 1, 0.5);
-    CGContextFillRect(border->context,
-                      CGRectMake(0, 0, frame.size.width, frame.size.height));
-    // if (!border->stack_indicator_overlay) {
-    //   border->stack_indicator_overlay = malloc(sizeof(struct border));
-    //   border_init(border->stack_indicator_overlay, border->cid);
-    //   CGRect overlay_rect = CGRectMake(0, 0, 20, 20);
-    //   border_create_window(border->stack_indicator_overlay, overlay_rect,
-    //   true,
-    //                        false);
-    // }
-    // CGFloat dot_size = 6.0;
-    // CGFloat x = frame.size.width - dot_size - 3;
-    // CGFloat y = frame.size.height / 2 - dot_size / 2;
-
-    // CGContextSaveGState(border->context);
-    // drawing_set_fill(border->context, 0xffff0000);
-    // CGContextFillEllipseInRect(border->context,
-    //                            CGRectMake(x, y, dot_size, dot_size));
-    // CGContextRestoreGState(border->context);
-
-    // CGRect overlay_frame =
-    //     CGRectMake(border->target_bounds.origin.x - 5,
-    //                border->target_bounds.origin.y + 5, 20, 20);
-    // border->stack_indicator_overlay->target_bounds = overlay_frame;
-    // border_update_internal(border->stack_indicator_overlay, settings);
-
-  } else if (border->stack_indicator_overlay) {
-    debug("border->stack_indicator_overlay");
-
-    border_destroy(border->stack_indicator_overlay);
-    border->stack_indicator_overlay = NULL;
-  }
+  
+  // TEST
+    //CGFloat x = frame.size.width;
+    //CGFloat y = frame.size.height;
+    //CGContextSetRGBFillColor(border->context, 1, 1, 1, 0.5);
+    //CGContextFillRect(border->context, CGRectMake(0, 0, frame.size.width, frame.size.height));
+    //CGContextRestoreGState(border->context);
 
   SLSSetWindowTags(cid, border->wid, &set_tags, 0x40);
   SLSClearWindowTags(cid, border->wid, &clear_tags, 0x40);
-
   if (disabled_update)
     SLSReenableUpdate(cid);
 }
 
 static void *border_update_async_proc(void *context) {
+  debug("border_update_async_proc started\n");
   struct {
     struct border *border;
     struct settings settings;
@@ -433,7 +526,6 @@ void border_destroy(struct border *border)
         }
 
         pthread_mutex_unlock(&border->mutex);
-        debug("border_destroy: cid=%d is_proxy=%d\n", border->cid, border->is_proxy);
         free(border);
     });
 }
@@ -472,10 +564,13 @@ void border_move(struct border *border) {
 }
 
 void border_update(struct border *border, bool try_async) {
+  char *window_title(int cid, uint32_t wid);
+  debug("border_update: cid=%d wid=%d \n", border->cid, border->target_wid);
   pthread_mutex_lock(&border->mutex);
+  yb_props_t *prop = table_find(&yb_props, &border->target_wid);
+  border->is_floating = prop && prop->is_floating;
   struct settings *settings = border_get_settings(border);
   if (!border->wid || !try_async) {
-    debug("[BADGES DEBUG] border_update -> border_update_internal\n");
     border_update_internal(border, settings);
     pthread_mutex_unlock(&border->mutex);
     return;
@@ -488,7 +583,9 @@ void border_update(struct border *border, bool try_async) {
 
   payload->border = border;
   payload->settings = *settings;
-
+  if(border->is_floating){
+    // draw_floating_indicator(border);
+  }
   pthread_t thread;
   pthread_create(&thread, NULL, border_update_async_proc, payload);
   pthread_detach(thread);

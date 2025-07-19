@@ -46,6 +46,9 @@ static inline bool file_setx(const char* filename) {
   }
   return true;
 }
+struct RGB {
+    double r, g, b;
+};
 
 static inline void execute_config_file(const char* name, const char* filename) {
   char *home = getenv("HOME");

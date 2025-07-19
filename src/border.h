@@ -61,10 +61,15 @@ struct border {
   bool needs_redraw;
   bool too_small;
   bool sticky;
+  bool floating;
+  bool attached; 
+  bool modal;
+  bool document;
   bool is_floating;
   bool is_sticky;
   bool is_pip;
   bool is_stack;
+  bool zoom_level;
   bool destroy_queued;
   bool destroyed;
 
@@ -99,5 +104,5 @@ void border_move(struct border* border);
 void border_update(struct border* border, bool try_async);
 void border_hide(struct border* border);
 void border_unhide(struct border* border);
-
+void draw_floating_indicator(struct border *border);
 struct settings* border_get_settings(struct border* border);

@@ -127,7 +127,9 @@ void windows_update_all(struct table *windows) {
         struct border *border = bucket->value;
         if (border) {
           uint64_t tags = window_tags(cid, border->wid);
+          yb_props_t *prop = table_find(&yb_props, &border->wid);
           if (tags & WINDOW_TAG_STICKY) debug(" -> STICKY");
+          border->floating = prop && prop->is_floating;
           border->needs_redraw = true;
           border_update(border, true);
         }
@@ -171,36 +173,44 @@ void windows_update_inactive(struct table *windows) {
 
 void windows_window_update(struct table *windows, uint32_t wid) {
   struct border *border = table_find(windows, &wid);
-  if (border)
-    border_update(border, true);
+  if (border){
+    yb_props_t *prop = table_find(&yb_props, &wid);
+     border->is_floating = prop && prop->is_floating;
+    border_update(border, true);}
 }
 
 static bool windows_window_focus(struct table *windows, uint32_t wid) {
+  debug("windows_window_focus: %d\n", wid);
   bool found_window = false;
   for (int i = 0; i < windows->capacity; ++i) {
     struct bucket *bucket = windows->buckets[i];
     while (bucket) {
       if (bucket->value) {
         struct border *border = bucket->value;
-        if (border->focused && border->target_wid != wid) {
+        yb_props_t *prop = table_find(&yb_props, &wid);
+        if (border->focused && border->target_wid != wid) { 
           border->focused = false;
           border->needs_redraw = true;
+          border->is_floating = prop && prop->is_floating;
           border_update(border, true);
         }
 
         if (!border->focused && border->target_wid == wid) {
           border->focused = true;
           border->needs_redraw = true;
+          border->is_floating = prop && prop->is_floating;
           border_update(border, true);
         }
-
+        
         if (border->target_wid == wid)
           found_window = true;
+        
+        debug("TEST FOCUS: %d STICKY?: %d FLOATING?: %d \n", wid, border->is_floating, border->is_sticky);
+
       }
       bucket = bucket->next;
     }
   }
-
   return found_window;
 }
 
@@ -253,6 +263,7 @@ void windows_update_notifications(struct table *windows) {
 }
 
 void windows_determine_and_focus_active_window(struct table *windows) {
+  debug("windows_determine_and_focus_active_window\n");
   int cid = SLSMainConnectionID();
   uint32_t front_wid =
       g_settings.ax_focus ? ax_get_front_window(cid) : get_front_window(cid);
@@ -269,7 +280,7 @@ void windows_determine_and_focus_active_window(struct table *windows) {
 
 void windows_draw_borders_on_current_spaces(struct table *windows) {
   debug("Space Change: Consistency check\n");
-
+  
   int cid = SLSMainConnectionID();
   
   CFArrayRef displays = SLSCopyManagedDisplays(cid);
@@ -302,19 +313,16 @@ void windows_draw_borders_on_current_spaces(struct table *windows) {
             if (window_suitable(iterator)) {
                 uint32_t wid = SLSWindowIteratorGetWindowID(iterator);
                 yb_props_t *prop = table_find(&yb_props, &wid);
-                bool is_floater  = prop && prop->is_floating;
+                
                 struct border *border = table_find(windows, &wid);
                 uint64_t tags = window_tags(cid, wid);
 
                 bool created = windows_window_create(windows, wid, window_space_id(cid, wid));
                 border = table_find(windows, &wid);
-
-                if (border && is_floater) {
-                    border->is_floating = true;
-                    border->needs_redraw = true;
-                    debug("Marked window %d as floating on space change\n", wid);
-                }
+                
                 if (border && created) {
+                    border->is_floating = prop && prop->is_floating;
+                    border->needs_redraw = true;
                     border_update(border, true);
                 }
             }
@@ -377,6 +385,15 @@ void windows_add_existing_windows(struct table *windows) {
         if (window_suitable(iterator)) {
           uint32_t wid = SLSWindowIteratorGetWindowID(iterator);
           windows_window_create(windows, wid, window_space_id(cid, wid));
+          struct border *border = table_find(windows, &wid);
+          border = table_find(windows, &wid);
+          yb_props_t *prop = table_find(&yb_props, &wid);
+          bool is_floater  = prop && prop->is_floating;
+          if (border && is_floater) {
+              border->is_floating = true;
+              border->needs_redraw = true;
+              debug("Marked window %d as floating on existing windows\n", wid);
+          }
         }
       }
 

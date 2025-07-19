@@ -27,12 +27,52 @@ typedef struct yb_props {
     bool is_sticky;
     bool is_pip;
 } yb_props_t;
+
+/* ---------- IPC payload definitions (shared with Yabai) -------------- */
+struct yb_hdr {
+    uint32_t event;
+    uint32_t count;
+};
+
+/* Events 1325 / 1326  ─ proxy begin / end ------------------------------ */
+struct payload {
+    uint32_t event;
+    uint32_t count;
+    uint32_t proxy_wid[512];
+    uint32_t real_wid[512];
+};
+
+/* Generic per‑window value payload (events 1008 / 1117 / 1227 / 1337) ---- */
+struct yb_payload {
+    uint32_t event;
+    uint32_t count;
+    uint32_t window_id;
+    uint32_t value;          /* 0/1 or any 32‑bit value per window      */
+};
+
+/* Event 1338  ─ bundled window‑flags ----------------------------------- */
+struct yb_flags {
+    uint8_t is_floating : 1;
+    uint8_t is_sticky   : 1;
+    uint8_t is_stacked  : 1;
+    uint8_t is_pip      : 1;
+};
+
+struct yb_flags_payload {
+    uint32_t event;
+    uint32_t count;
+    uint32_t window_id[512];
+    struct yb_flags flags[512];
+};
+
 extern struct table yb_props;
 void yabai_props_init(void);
 void yabai_props_free(void);
 void yb_props_bootstrap(void);
 yb_props_t *yb_props_get(uint32_t wid, bool create_if_missing);
+
 static inline void yb_props_refresh_flags(void) { yb_props_bootstrap(); }
+
 struct yabai_proxy_payload {
   union { struct border* proxy; struct border* border; };
   struct settings settings;
@@ -197,104 +237,100 @@ static inline void yabai_proxy_end(struct table* windows, uint32_t wid, uint32_t
   if (border) pthread_mutex_unlock(&border->mutex);
 }
 
-static void yabai_message(CFMachPortRef port, void* data, CFIndex size, void* context) {
-  
-  if (size == sizeof(struct mach_message)) {
-    struct mach_message* message = data;
-    uint32_t *fields = (uint32_t *)data;
-    
-    struct payload {
-      uint32_t event;
-      uint32_t count;
-      uint32_t proxy_wid[512];
-      uint32_t real_wid[512];
-    };
-    struct yb_payload {
-      uint32_t event;
-      uint32_t count;
-      uint32_t window_id[512];
-      uint32_t data[512];
-  };
-  struct yb_payload* yb_payload = message->descriptor.address;
-    struct payload* payload = message->descriptor.address;
-    //debug("[borders debug] payload.event: %u\n", yb_payload->event);
 
-    debug("[borders debug] payload.count: %u\n", yb_payload->count);
-    for (int i = 0; i < yb_payload->count; i++) {
-        debug("[borders debug] window_id: %u data: %u, event: %u \n",
-            yb_payload->window_id[i], yb_payload->data[i], yb_payload->event);
-    }
-    if (message->descriptor.size == sizeof(struct payload)) {
-    //debug("[borders debug] payload received at: %p\n", (void*)yb_payload);
-    //debug("[borders debug] payload receoved: %u\n", yb_payload);
-    //debug("[borders debug] payload->data: %u\n", yb_payload->data);
-     if (payload->event == 1325) {
-        for (int i = 0; i < payload->count; i++) {
-          yabai_proxy_begin(context,
-                            payload->proxy_wid[i],
-                            payload->real_wid[i]  );
+static void yabai_message(CFMachPortRef port, void *data, CFIndex size, void *ctx)
+{
+  if (!data || size < sizeof(struct mach_message)) return;
+
+    if (size != sizeof(struct mach_message)) return;
+
+    struct mach_message *msg  = data;
+    struct yb_hdr       *hdr  = msg->descriptor.address;
+    switch (hdr->event) {
+
+        case 1325:
+        case 1326: {
+            if (msg->descriptor.size != sizeof(struct payload)) break;
+            struct payload *pl = (void *)hdr;
+            for (uint32_t i = 0; i < pl->count; ++i) {
+                if (hdr->event == 1325)
+                    yabai_proxy_begin(ctx, pl->proxy_wid[i], pl->real_wid[i]);
+                else
+                    yabai_proxy_end  (ctx, pl->proxy_wid[i], pl->real_wid[i]);
+            }
+            break;
         }
-        //animation
-      } else if (payload->event == 1326) {
-        for (int i = 0; i < payload->count; i++) {
-          yabai_proxy_end(context,
-                          payload->proxy_wid[i],
-                          payload->real_wid[i]  );
+
+        case 1008:  /* sticky */
+        case 1117:  /* pip    */
+        case 1227:  /* float  */
+        case 1337:  /* stack  */ {
+            debug("🟨🟨🟨🟨Received window flags for event %d\n", hdr->event);
+            if (msg->descriptor.size != sizeof(struct yb_payload)) break;
+            struct yb_payload *pl = (void *)hdr;
+            debug("🩷🩷🩷\n");
+            for (uint32_t i = 0; i < pl->count; ++i) {
+                uint32_t wid = pl->window_id;
+                uint32_t val = pl->value;
+                yb_props_t *p = yb_props_get(wid, true);
+                struct border *b = table_find(ctx, &wid);
+
+                switch (hdr->event) {
+                    case 1008: 
+                        p->is_sticky            = val; 
+                        if (b) b->is_sticky     = val; 
+                        break;
+                    case 1117: 
+                        p->is_pip               = val;                                  
+                        break;
+                    case 1227: 
+                        pthread_mutex_lock(&b->mutex);
+                        p->is_floating          = val; 
+                        if (b) b->is_floating   = val;
+                        pthread_mutex_unlock(&b->mutex);
+                    debug("🟨🟨🟨🟨Received floating flag for wid %d: %d\n", wid, val);
+                        break;
+                    case 1337: 
+                        p->is_stacked           = val;                                  
+                        break;
+                }
+                if (b) { b->needs_redraw = true; border_update(b, true); }
+            }
+            break;
         }
-      }
-    int cid = SLSMainConnectionID();
-    for (int i = 0; i < yb_payload->count; i++) {
-      struct border* border = table_find(context, &yb_payload->window_id[i]);
-   
-      // animation
-     
-      //sticky
-      if (yb_payload->event == 1008) {
-        if(border){
-              pthread_mutex_lock(&border->mutex);
-              border->is_sticky = yb_payload->data[i];
-              yb_props_t *p = yb_props_get(yb_payload->window_id[i], true);
-              p->is_sticky = yb_payload->data[i];
-              border_update(border, true);  
-              pthread_mutex_unlock(&border->mutex);
-              debug("[badges debug] border updated is_sticky %d\n", border->is_sticky);
-          }
-      }//pip
-      else if (yb_payload->event == 1117) {
-              yb_props_t *p = yb_props_get(yb_payload->window_id[i], true);
-              p->is_pip = yb_payload->data[i];
-      }//float
-      else if (yb_payload->event == 1227) {
-        //get border 
-            if(border){
-              pthread_mutex_lock(&border->mutex);
-              border->is_floating = yb_payload->data[i];
-              yb_props_t *p = yb_props_get(yb_payload->window_id[i], true);
-              p->is_floating = yb_payload->data[i];
-              //border->needs_redraw=true;
-              border_update(border, true);  // triggers redraw
-              pthread_mutex_unlock(&border->mutex);
-              debug("[badges debug] border updated %d\n", border->is_floating);
-          }
-          //We can't use the current flags border has inside windows.h - they look like they're for discerning internal API flags and not yabai's flags.
-          //debug("[WINDOW FLOATED] Window %d tags: 0x%llx \n", yb_payload->window_id, window_tags(cid, yb_payload->window_id[i]));
-      }
-            
-        
-      }//stack
-      if (yb_payload->event == 1337) {
-        for (int i = 0; i < yb_payload->count; i++) {
-            debug("[badges debug] STACK INDICATOR: window_id=%u stack_index=%u\n",
-              yb_payload->window_id[i],
-              yb_payload->data[i]);
-              yb_props_t *p = yb_props_get(yb_payload->window_id[i], true);
-              p->is_stacked = yb_payload->data[i] != 0;
-              struct window* window = table_find(context, &yb_payload->window_id[i]);         
+        case 1338: {
+            debug("🟧🟧🟧🟧Received bundled window flags\n");
+            if (msg->descriptor.size != sizeof(struct yb_flags_payload)) break;
+            struct yb_flags_payload *pl = (void *)hdr;
+
+            for (uint32_t i = 0; i < pl->count; ++i) {
+                uint32_t wid = pl->window_id[i];
+                struct yb_flags f = pl->flags[i];
+
+                yb_props_t *p = yb_props_get(wid, true);
+                p->is_floating = f.is_floating;
+                p->is_sticky   = f.is_sticky;
+                p->is_stacked  = f.is_stacked;
+                p->is_pip      = f.is_pip;
+
+                struct border *b = table_find(ctx, &wid);
+                if (b) {
+                    pthread_mutex_lock(&b->mutex);
+                    b->is_floating  = p->is_floating;
+                    b->is_sticky    = p->is_sticky;
+                    b->needs_redraw = true;
+                    border_update(b, true);
+                    pthread_mutex_unlock(&b->mutex);
+                }
+            }
+            break;
         }
+
+        default:
+            break;
     }
-    }
-    mach_msg_destroy(&message->header);
-  }
+
+    mach_msg_destroy(&msg->header);
 }
 
 static inline void yabai_register_mach_port(struct table* windows) {
