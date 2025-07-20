@@ -64,7 +64,13 @@ struct yb_flags_payload {
     uint32_t window_id[512];
     struct yb_flags flags[512];
 };
-
+struct yb_stack_payload {
+    uint32_t event;
+    uint32_t window_id;
+    uint32_t index;
+    uint32_t len;
+    uint32_t is_active;
+};
 extern struct table yb_props;
 void yabai_props_init(void);
 void yabai_props_free(void);
@@ -265,67 +271,110 @@ static void yabai_message(CFMachPortRef port, void *data, CFIndex size, void *ct
         case 1117:  /* pip    */
         case 1227:  /* float  */
         case 1337:  /* stack  */ {
-            debug("🟨🟨🟨🟨Received window flags for event %d\n", hdr->event);
+            debug("🟨 Received window flags for event %d\n", hdr->event);
             if (msg->descriptor.size != sizeof(struct yb_payload)) break;
             struct yb_payload *pl = (void *)hdr;
-            debug("🩷🩷🩷\n");
             for (uint32_t i = 0; i < pl->count; ++i) {
                 uint32_t wid = pl->window_id;
                 uint32_t val = pl->value;
                 yb_props_t *p = yb_props_get(wid, true);
                 struct border *b = table_find(ctx, &wid);
-
                 switch (hdr->event) {
-                    case 1008: 
+                    case 1008:
+                        debug("🟨🟨 1️⃣0️⃣0️⃣8️⃣ is_sticky: %d\n", val);
                         p->is_sticky            = val; 
                         if (b) b->is_sticky     = val; 
                         break;
-                    case 1117: 
+                    case 1117:
+                        debug("🟨🟨 1️⃣1️⃣1️⃣7️⃣ is_pip: %d\n", val);
                         p->is_pip               = val;                                  
                         break;
-                    case 1227: 
+                    case 1227:
+                        debug("🟨🟨 1️⃣2️⃣2️⃣7️⃣ is_floating: %d\n", val);
+                        debug("🟨🟨 WID: %d\n", wid);
                         pthread_mutex_lock(&b->mutex);
-                        p->is_floating          = val; 
+                        p->is_floating          = val;
                         if (b) b->is_floating   = val;
                         pthread_mutex_unlock(&b->mutex);
-                    debug("🟨🟨🟨🟨Received floating flag for wid %d: %d\n", wid, val);
                         break;
-                    case 1337: 
+                    case 1337:
                         p->is_stacked           = val;                                  
                         break;
+                    case 1338:
+                        debug("1️⃣3️⃣3️⃣8️⃣ TEST %d\n", val);                           
+                        break;
+                    case 1339:
+                        debug("🟨🟨 1️⃣3️⃣3️⃣9️⃣ is_stacked: %d\n");
+                        // debug("🟨🟨 index: %d, len: %d, is_active:%d \n", val,pl->wid,pl->len,pl->is_active);
+                        break;
+                    case 1340:
+                        debug("🟨🟨 1️⃣3️⃣4️⃣0️⃣ test: %d\n");
+                        // debug("🟨🟨 index: %d, len: %d, is_active:%d \n", val,pl->wid,pl->len,pl->is_active);
+                        break;
                 }
-                if (b) { b->needs_redraw = true; border_update(b, true); }
+                // if (b) { b->needs_redraw = true; border_update(b, true); }
             }
             break;
         }
         case 1338: {
-            debug("🟧🟧🟧🟧Received bundled window flags\n");
+            debug("🟧 1️⃣3️⃣3️⃣8️⃣ Received bundled window flags\n");
             if (msg->descriptor.size != sizeof(struct yb_flags_payload)) break;
             struct yb_flags_payload *pl = (void *)hdr;
-
+            debug("🟧🟧 ✅ pass count: %d\n", pl->count);
             for (uint32_t i = 0; i < pl->count; ++i) {
                 uint32_t wid = pl->window_id[i];
-                struct yb_flags f = pl->flags[i];
+                debug("🟧🟧🟧 wid: %d\n", wid);
+                debug("🟧🟧🟧 is_floating: %d, is_sticky: %d, is_stacked: %d, is_pip: %d\n",
+                      pl->flags[i].is_floating,
+                      pl->flags[i].is_sticky,
+                      pl->flags[i].is_stacked,
+                      pl->flags[i].is_pip);
+            //     struct yb_flags f = pl->flags[i];
 
-                yb_props_t *p = yb_props_get(wid, true);
-                p->is_floating = f.is_floating;
-                p->is_sticky   = f.is_sticky;
-                p->is_stacked  = f.is_stacked;
-                p->is_pip      = f.is_pip;
+            //     yb_props_t *p = yb_props_get(wid, true);
+            //     p->is_floating = f.is_floating;
+            //     p->is_sticky   = f.is_sticky;
+            //     p->is_stacked  = f.is_stacked;
+            //     p->is_pip      = f.is_pip;
 
-                struct border *b = table_find(ctx, &wid);
-                if (b) {
-                    pthread_mutex_lock(&b->mutex);
-                    b->is_floating  = p->is_floating;
-                    b->is_sticky    = p->is_sticky;
-                    b->needs_redraw = true;
-                    border_update(b, true);
-                    pthread_mutex_unlock(&b->mutex);
-                }
+            //     struct border *b = table_find(ctx, &wid);
+            //     if (b) {
+            //         pthread_mutex_lock(&b->mutex);
+            //         b->is_floating  = p->is_floating;
+            //         b->is_sticky    = p->is_sticky;
+            //         b->needs_redraw = true;
+            //         border_update(b, true);
+            //         pthread_mutex_unlock(&b->mutex);
+            //     }
             }
             break;
         }
-
+        case 1339: {
+            debug("🟦 Received window properties\n");
+            if (msg->descriptor.size != sizeof(struct yb_stack_payload)) break;
+            debug("🟦🟦 ✅ Pass \n");
+            struct yb_stack_payload *pl = (void *)hdr;
+            debug("🟦🟦🟦 wid: %d, index: %d, len: %d, is_active: %d\n",
+                  pl->window_id,
+                  pl->index,
+                  pl->len,
+                  pl->is_active);
+            // yb_props_refresh_flags();
+            break;
+        }
+         case 1340: {
+            debug("💟 stack reordered\n");
+            if (msg->descriptor.size != sizeof(struct yb_stack_payload)) break;
+            debug("💟💟 ✅ Pass \n");
+            struct yb_stack_payload *pl = (void *)hdr;
+            debug("💟💟💟 wid: %d, index: %d, len: %d, is_active: %d\n",
+                  pl->window_id,
+                  pl->index,
+                  pl->len,
+                  pl->is_active);
+            // yb_props_refresh_flags();
+            break;
+        }
         default:
             break;
     }

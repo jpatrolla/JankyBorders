@@ -343,13 +343,6 @@ void border_update_internal(struct border *border, struct settings *settings) {
   yb_props_t *prop = table_find(&yb_props, &border->target_wid);
   yb_props_t *propswid = table_find(&yb_props, &border->wid);
 
-
-  if(propswid && propswid->is_floating){
-    debug("❤️propswid is not null, is_floating=%d\n", propswid->is_floating ? 1 : 0);
-  }
-    // debug("wid: is_floating=%d, target_wid: is_floating=%d\n",
-    //             wid->is_floating ? 1 : 0,
-    //             targetwid->is_floating ? 1 : 0);
   uint64_t tags = window_tags(cid, border->target_wid);
   border->sticky = tags & WINDOW_TAG_STICKY;
   border->is_sticky = tags & WINDOW_TAG_STICKY;
@@ -358,8 +351,6 @@ void border_update_internal(struct border *border, struct settings *settings) {
   border->attached = tags & WINDOW_TAG_ATTACHED;
   border->modal = tags & WINDOW_TAG_MODAL; 
   border->document = tags & WINDOW_TAG_DOCUMENT;
-  debug("💙 border->is_floating =%d\n", border->is_floating ? 1 : 0);
-  debug("🔥 wid =%d\n", border->wid);
 
   if (!border->sticky && !is_space_visible(cid, border->sid))
     return;
