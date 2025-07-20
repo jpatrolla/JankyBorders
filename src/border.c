@@ -4,6 +4,7 @@
 #include <pthread.h>
 #include "misc/yabai.h"
 #include <time.h>
+#include <dispatch/dispatch.h>
 
 extern struct settings g_settings;
 CGFloat indicator_offset = 20.0;
@@ -491,6 +492,37 @@ struct border *border_create() {
   return border;
 }
 
+static void border_destroy_async(void *context) {
+    struct border *border = (struct border *)context;
+    /* ②  Second-level guard in case another async block sneaks in */
+    if (border->destroyed) return;
+    border->destroyed = true;
+
+    pthread_mutex_lock(&border->mutex);
+
+    /* ---- tear-down begins ---- */
+    border_destroy_window(border);
+
+    if (border->proxy) {
+        struct border *child = border->proxy;
+        border->proxy = NULL;          /* break link first */
+        border_destroy(child);
+    }
+
+    animation_stop(&border->animation);
+
+    if (!border->is_proxy &&
+        border->cid != 0 &&
+        border->cid != SLSMainConnectionID())
+    {
+        SLSReleaseConnection(border->cid);
+        border->cid = 0;
+    }
+
+    pthread_mutex_unlock(&border->mutex);
+    free(border);
+}
+
 void border_destroy(struct border *border)
 {
     /* ①  Return immediately if we’ve already queued a destroy */
@@ -499,35 +531,41 @@ void border_destroy(struct border *border)
 
     border_hide(border);
 
-    dispatch_async(dispatch_get_main_queue(), ^{
-        /* ②  Second-level guard in case another async block sneaks in */
-        if (border->destroyed) return;
-        border->destroyed = true;
+    dispatch_async_f(dispatch_get_main_queue(), border, border_destroy_async);
+}
 
-        pthread_mutex_lock(&border->mutex);
+struct border_move_payload {
+  struct border *border;
+  struct settings *settings;
+};
 
-        /* ---- tear-down begins ---- */
-        border_destroy_window(border);
+void *border_move_async_proc(void *context) {
+  struct border_move_payload *payload = (struct border_move_payload *)context;
+  struct border *border = payload->border;
+  struct settings *settings = payload->settings;
+  pthread_mutex_lock(&border->mutex);
+  CGRect window_frame;
+  if (!border_coalesce_resize_and_move_events(border, &window_frame)) {
+    pthread_mutex_unlock(&border->mutex);
+    free(payload);
+    return NULL;
+  }
 
-        if (border->proxy) {
-            struct border *child = border->proxy;
-            border->proxy = NULL;          /* break link first */
-            border_destroy(child);
-        }
+  CGPoint origin = {
+      .x = window_frame.origin.x - settings->border_width - BORDER_PADDING,
+      .y = window_frame.origin.y - settings->border_width - BORDER_PADDING};
 
-        animation_stop(&border->animation);
-
-        if (!border->is_proxy &&
-            border->cid != 0 &&
-            border->cid != SLSMainConnectionID())
-        {
-            SLSReleaseConnection(border->cid);
-            border->cid = 0;
-        }
-
-        pthread_mutex_unlock(&border->mutex);
-        free(border);
-    });
+  CFTypeRef transaction = SLSTransactionCreate(border->cid);
+  if (transaction) {
+    SLSTransactionMoveWindowWithGroup(transaction, border->wid, origin);
+    SLSTransactionCommit(transaction, 0);
+    CFRelease(transaction);
+  }
+  border->target_bounds = window_frame;
+  border->origin = origin;
+  pthread_mutex_unlock(&border->mutex);
+  free(payload);
+  return NULL;
 }
 
 void border_move(struct border *border) {
@@ -539,28 +577,13 @@ void border_move(struct border *border) {
   pthread_mutex_unlock(&border->mutex);
 
   struct settings *settings = border_get_settings(border);
-  dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
-    pthread_mutex_lock(&border->mutex);
-    CGRect window_frame;
-    if (!border_coalesce_resize_and_move_events(border, &window_frame)) {
-      pthread_mutex_unlock(&border->mutex);
-      return;
-    }
 
-    CGPoint origin = {
-        .x = window_frame.origin.x - settings->border_width - BORDER_PADDING,
-        .y = window_frame.origin.y - settings->border_width - BORDER_PADDING};
-
-    CFTypeRef transaction = SLSTransactionCreate(border->cid);
-    if (transaction) {
-      SLSTransactionMoveWindowWithGroup(transaction, border->wid, origin);
-      SLSTransactionCommit(transaction, 0);
-      CFRelease(transaction);
-    }
-    border->target_bounds = window_frame;
-    border->origin = origin;
-    pthread_mutex_unlock(&border->mutex);
-  });
+  struct border_move_payload *payload = malloc(sizeof(struct border_move_payload));
+  payload->border = border;
+  payload->settings = settings;
+  pthread_t thread;
+  pthread_create(&thread, NULL, border_move_async_proc, payload);
+  pthread_detach(thread);
 }
 
 void border_update(struct border *border, bool try_async) {

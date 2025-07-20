@@ -68,6 +68,7 @@ static void mark_stacked_windows(void) {
 }
 static void mark_floating_windows(void)
 {
+    debug("🟦🟦🟦🟦  Marking floating windows\n");
     // First, collect the set of all windows and flag the floating ones
     FILE *fp = popen("yabai -m query --windows", "r");
     if (!fp) return;

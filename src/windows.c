@@ -204,8 +204,6 @@ static bool windows_window_focus(struct table *windows, uint32_t wid) {
         
         if (border->target_wid == wid)
           found_window = true;
-        
-        debug("TEST FOCUS: %d STICKY?: %d FLOATING?: %d \n", wid, border->is_floating, border->is_sticky);
 
       }
       bucket = bucket->next;
