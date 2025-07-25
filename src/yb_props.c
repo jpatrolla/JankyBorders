@@ -55,66 +55,89 @@ static void mark_pip_windows(void) {
 static void mark_stacked_windows(void) {
     FILE *fp = popen(
         "yabai -m query --windows | "
-        "jq -r '.[] | select(.\"is-stacked\"==true) | .id'", "r");
+        "jq -r '.[] | select(.\"stack-index\" != null) | [.id, .\"stack-index\"] | @tsv'", "r");
     if (!fp) return;
 
-    char buf[32];
+    char buf[64];
     while (fgets(buf, sizeof buf, fp)) {
-        uint32_t wid = (uint32_t)strtoul(buf, NULL, 10);
-        yb_props_t *p = props_for(wid, true);
-        p->is_stacked    = true;
+        uint32_t wid, index;
+        if (sscanf(buf, "%u\t%u", &wid, &index) == 2) {
+            yb_props_t *p = props_for(wid, true);
+            if (p) p->stack_index = index;
+        }
     }
     pclose(fp);
 }
 static void mark_floating_windows(void)
 {
     debug("🟦🟦🟦🟦  Marking floating windows\n");
-    // First, collect the set of all windows and flag the floating ones
-    FILE *fp = popen("yabai -m query --windows", "r");
+
+    FILE *fp = popen(
+        "yabai -m query --windows | "
+        "jq -r '.[] | [.id, .\"is-floating\"] | @tsv'", "r");
     if (!fp) return;
 
-    char *json = NULL;
-    size_t len = 0;
-    FILE *mem = open_memstream(&json, &len);
-    if (!mem) {
-        pclose(fp);
-        return;
+    char buf[64];
+    while (fgets(buf, sizeof(buf), fp)) {
+        uint32_t wid;
+        int is_floating;
+
+        if (sscanf(buf, "%u\t%d", &wid, &is_floating) == 2) {
+            yb_props_t *p = props_for(wid, true);
+            if (p) {
+                p->is_floating = is_floating;
+                debug("Window %d is floating: %d\n", wid, is_floating);
+            }
+        }
     }
 
-    char buf[256];
-    while (fgets(buf, sizeof(buf), fp)) fputs(buf, mem);
-    fclose(mem);
     pclose(fp);
-
-    if (!json) return;
-
-    // Parse the full JSON array of windows
-    struct json_object *windows = json_tokener_parse(json);
-    free(json);
-    if (!windows || !json_object_is_type(windows, json_type_array)) return;
-
-    int count = json_object_array_length(windows);
-    for (int i = 0; i < count; i++) {
-        debug("processing window %d\n", i);
-        struct json_object *win = json_object_array_get_idx(windows, i);
-        struct json_object *id_obj, *floating_obj;
-
-        if (!json_object_object_get_ex(win, "id", &id_obj)) continue;
-
-        uint32_t wid = (uint32_t)json_object_get_int(id_obj);
-        yb_props_t *p = props_for(wid, true);
-        p->is_floating = (json_object_object_get_ex(win, "is-floating", &floating_obj)
-                          && json_object_get_boolean(floating_obj));
-                          debug("Window %d is floating: %d\n", wid, p->is_floating);
-    }
-    json_object_put(windows);
 }
+void mark_all_window_flags(void)
+{
+    debug("✅✅✅✅  Marking all window flags ✅✅✅✅\n");
 
+    FILE *fp = popen(
+    "yabai -m query --windows | "
+    "jq -r '.[] | "
+          "[ .id, "
+          "  (.\"is-sticky\"   | if . then 1 else 0 end), "
+          "  (.\"is-pip\"      | if . then 1 else 0 end), "
+          "  (.\"stack-index\" // -1), "
+          "  (.\"is-floating\" | if . then 1 else 0 end) ] "
+          "| @tsv'", "r");
+    if (!fp) return;
+
+    char buf[128];
+    while (fgets(buf, sizeof(buf), fp)) {
+        uint32_t wid;
+        int is_sticky = 0, is_pip = 0, stack_index = -1, is_floating = 0;
+
+        // Handle optional fields by allowing nulls to be empty strings, and using sscanf carefully
+        // Null stack-index becomes empty field, sscanf will fail with fewer matches
+        int fields = sscanf(buf, "%u\t%d\t%d\t%d\t%d", &wid, &is_sticky, &is_pip, &stack_index, &is_floating);
+        if (fields < 2) continue;
+
+        yb_props_t *p = props_for(wid, true);
+        if (!p) continue;
+
+        if (fields >= 2) p->is_sticky   = is_sticky;
+        if (fields >= 3) p->is_pip      = is_pip;
+        if (fields >= 4 && stack_index >= 0) p->stack_index = stack_index;
+        if (fields >= 5) p->is_floating = is_floating;
+
+        debug("↪️ Window %u → sticky: %d, pip: %d, stack: %d, floating: %d\n",
+              wid, is_sticky, is_pip, stack_index, is_floating);
+    }
+
+    pclose(fp);
+}
 void yb_props_bootstrap(void)
 {
     table_clear(&yb_props);           /* One‑shot population at startup */
-    mark_floating_windows();
-    mark_sticky_windows();
-    mark_stacked_windows();
-    mark_pip_windows();
+    mark_all_window_flags();
+    // mark_floating_windows();
+    // mark_sticky_windows();
+    // mark_stacked_windows();
+    // mark_pip_windows();
 }

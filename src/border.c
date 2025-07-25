@@ -117,10 +117,10 @@ static bool border_calculate_bounds(struct border *border, CGRect *frame,
 
   
   // adjust for indicators
-  if (border->stack_index > 1) {
-    frame->origin.x -= indicator_offset;
-    frame->size.width += indicator_offset;
-  }
+  // if (border->stack_index > 1) {
+  //   frame->origin.x -= indicator_offset;
+  //   frame->size.width += indicator_offset;
+  // }
 
   border->origin = frame->origin;
   frame->origin = CGPointZero;
@@ -139,23 +139,17 @@ static void border_draw(struct border *border, CGRect frame,
   color_style.stype = COLOR_STYLE_SOLID;
   if(border->focused) {
     if(border->is_floating){
-      color_style.color = 0xFF0A84FF;
-      // draw_floating_indicator(border);
-     } else {
-      color_style = settings->active_window;
-     }
+        color_style.color = 0xFF0A84FF;
+    } else {
+        color_style = settings->active_window;
+    }
+    
   } else {
     color_style = settings->inactive_window;
   }
-
-  // if (border->is_floating) {
-  //   color_style.stype = COLOR_STYLE_SOLID;
-  //   color_style.color = 0xFF0A84FF; // macOS Blue;
-  //   draw_floating_indicator(border);
-  // } else {
-  //   color_style = border->focused ? settings->active_window : settings->inactive_window;
-  // }
-
+  if (border->is_sticky){
+        color_style.color = 0xFFFF9500;
+  }
   CGGradientRef gradient = NULL;
   CGPoint gradient_dir[2];
   if (color_style.stype == COLOR_STYLE_SOLID ||
@@ -222,13 +216,21 @@ static void border_draw(struct border *border, CGRect frame,
                                color_style.color);
     }
   }
+  // 🟨🟨🟨 floating indicators
   if(border->is_floating || border->is_sticky){
     draw_floating_indicator(border);
   }
-  // CGContextSetRGBFillColor(border->context, 1, 0, 0, 1); // light red
-  // CGContextFillRect(border->context, frame);
+  if(border->is_sticky){
+  // 🟩🟩🟩 sticky indicators
+    draw_sticky_indicator(border);
+  }
+  
+  if(border->stack_index > 0) {
+    draw_stack_indicators(border);
+    debug("🐸 border_draw: wid=%d, stack_index: %d, is_topmost: %d\n",
+        border->wid, border->stack_index, border->stack_is_topmost_wid);
+  }
   CFRelease(inner_clip_path);
-   
   CGContextFlush(border->context);
   CGContextResetClip(border->context);
   CGContextRestoreGState(border->context);
@@ -238,8 +240,6 @@ static void border_draw(struct border *border, CGRect frame,
 }
 
 void draw_floating_indicator(struct border *border) {
-  // Indicators
-  debug("🌈draw_floating_indicator: cid=%d wid=%d\n", border->cid, border->wid);
   if (!(border->is_floating || border->is_sticky)) return;
   CGRect bounds = border->drawing_bounds;
 
@@ -249,18 +249,78 @@ void draw_floating_indicator(struct border *border) {
       CGContextSetRGBFillColor(border->context, 1.0, 1.0, 0.0, 1.0); // yellow
       CGContextFillEllipseInRect(border->context, circleRect);
   }
-    debug("🟦 draw_floating_indicator: wid=%d floating=%d bounds=(%.0f, %.0f, %.0f, %.0f)\n",
-          border->wid,
-          border->is_floating,
-          bounds.origin.x,
-          bounds.origin.y,
-          bounds.size.width,
-          bounds.size.height);
   CGContextRestoreGState(border->context);
 }
 
-static void draw_stack_indicators(){
+void draw_sticky_indicator(struct border *border) {
+  if (!border->is_sticky || !border->sticky) return;
+  debug("🟥🟥🟥🟥 drawing sticky  indicators\n");
+  CGRect bounds = border->drawing_bounds;
+
+  CGContextSaveGState(border->context);
+  CGRect circleRect = CGRectMake(bounds.size.width + 5, bounds.size.height - 32, 16, 16);
+  if (border->is_sticky || border->sticky) {
+      CGContextSetRGBFillColor(border->context, 0.0, 1.0, 0.0, 1.0); // green
+      CGContextFillEllipseInRect(border->context, circleRect);
+  }
+  CGContextRestoreGState(border->context);
+}
+
+void
+border_clear_stack_state(struct border *b)
+{
+    b->stack_id             = 0;
+    b->stack_index          = 0;
+    b->stack_len            = 0;
+    b->stack_is_topmost_wid = false;
+    b->needs_redraw         = true;   /* one more paint clears indicators */
+}
+
+/* Force‑redraw every border that belongs to a stack (stack_index > 0). */
+void border_redraw_all_stacked(struct table *windows)
+{
+    if (!windows) return;
+
+    for (int i = 0; i < windows->capacity; ++i) {
+        struct bucket *bucket = windows->buckets[i];
+        while (bucket) {
+            if (bucket->value) {
+                struct border *b = bucket->value;
+                if (b && b->stack_index > 0) {
+                    b->needs_redraw = true;
+                    border_update(b, /*try_async=*/true);
+                }
+            }
+            bucket = bucket->next;
+        }
+    }
+}
+
+void draw_stack_indicators(struct border *border) {
+  //TODO: styling
+  /** TODO:
+    [] styling
+    [] interaction/on click
+    */
+  debug("🟦🟦🟦🟦 drawing stack indicators\n");
   // placeholder for stack indicators
+  if(border->stack_index <= 0) return;
+  debug(" 🤢🤢🤢  \n");
+  uint32_t indicator_y_offset = border->stack_index * 16;
+  debug(" 🟦🟦🟦 indicator_y_offset: %d\n", indicator_y_offset);
+  CGRect bounds = border->drawing_bounds;
+
+  CGContextSaveGState(border->context);
+  CGRect circleRect = CGRectMake(-5, bounds.size.height - indicator_y_offset, 16, 16);
+  if(border->stack_is_topmost_wid){
+      CGContextSetRGBFillColor(border->context, 0.0, 0.0, 1.0, 1.0); // blue
+  } else {
+       CGContextSetRGBFillColor(border->context, 1.0, 1.0, 0.0, 1.0); // yellow
+  }
+     
+      CGContextFillEllipseInRect(border->context, circleRect);
+
+  CGContextRestoreGState(border->context);
 
   //if (border->stack_index > 1) {
   //  path_rect.origin.x +=
@@ -278,7 +338,7 @@ static void draw_stack_indicators(){
   //    CGRectMake((indicator_offset / 2), y, indicator_size, indicator_size),
   //    0xffff0000);
   //    CGContextSetRGBFillColor(border->context, 1, 1, 1, 0.5);
-  //    CGContextFillRect(border->context,
+  //    CGContextFillRect(border->context,s
   //                      CGRectMake(0, 0, frame.size.width, frame.size.height));
 
   //    // if (!border->stack_indicator_overlay) {
@@ -329,23 +389,20 @@ void border_create_window(struct border *border, CGRect frame, bool unmanaged,
 }
 
 void border_update_internal(struct border *border, struct settings *settings) {
-  debug("border_update_internal: cid=%d wid=%d\n", border->cid, border->wid);
 
   if (border->external_proxy_wid){
-    debug("border_update_internalL extnernal proxy, exiting early\n");
     return;}
 
   int cid = border->cid;
   CGRect frame;
   if (!border_calculate_bounds(border, &frame, settings)){
-    debug("border_calculate_bounds failed, exiting early\n");
     return;}
   yb_props_t *prop = table_find(&yb_props, &border->target_wid);
   yb_props_t *propswid = table_find(&yb_props, &border->wid);
 
   uint64_t tags = window_tags(cid, border->target_wid);
   border->sticky = tags & WINDOW_TAG_STICKY;
-  border->is_sticky = tags & WINDOW_TAG_STICKY;
+  border->is_sticky = prop && prop->is_sticky;
   border->floating = tags & WINDOW_TAG_FLOATING;
   border->is_floating = prop && prop->is_floating;
   border->attached = tags & WINDOW_TAG_ATTACHED;
@@ -370,7 +427,7 @@ void border_update_internal(struct border *border, struct settings *settings) {
   
   bool disabled_update = false;
   if (!CGRectEqualToRect(frame, border->frame)) {
-    debug("!CGRectEqualToRect");
+    
     CFTypeRef transaction = SLSTransactionCreate(cid);
     if (!transaction)
       return;
@@ -396,18 +453,14 @@ void border_update_internal(struct border *border, struct settings *settings) {
   CFTypeRef transaction = SLSTransactionCreate(cid);
   if (!transaction)
     return;
-  debug("⭕Moved window %d to (%.0f, %.0f)\n",border->wid, border->origin.x, border->origin.y);
 
   SLSTransactionMoveWindowWithGroup(transaction, border->wid, border->origin);
-  debug("🟡Moved window to (%.0f, %.0f)\n", border->origin.x, border->origin.y);
   if (!border->is_proxy) {
     CGAffineTransform transform = CGAffineTransformIdentity;
     transform.tx = -border->origin.x;
     transform.ty = -border->origin.y;
     SLSTransactionSetWindowTransform(transaction, border->wid, 0, 0, transform);
   }
-    // draw_floating_indicator(border);
-
   SLSTransactionSetWindowLevel(transaction, border->wid, level);
   SLSTransactionSetWindowSubLevel(transaction, border->wid, sub_level);
   SLSTransactionOrderWindow(transaction, border->wid, settings->border_order,
@@ -420,16 +473,8 @@ void border_update_internal(struct border *border, struct settings *settings) {
   
   CGContextSaveGState(border->context);
   struct color_style color_style;
-  bool was_sticky = border->sticky;
-  
-  // if (border->is_floating) {
-  //   color_style.stype = COLOR_STYLE_SOLID;
-  //   color_style.color = 0xffffff00; // yellow
-  // } else {
-  //   color_style = border->focused ? settings->active_window : settings->inactive_window;
-  // }
-  // yb_props_t *prop = table_find(&yb_props, &border->wid);
-  // border->is_floating = prop && prop->is_floating;
+  bool was_sticky = border->sticky;  
+
   if (border && border->sticky) {
     set_tags |= WINDOW_TAG_STICKY;
     clear_tags |= (1ULL << 45);
@@ -449,7 +494,6 @@ void border_update_internal(struct border *border, struct settings *settings) {
 }
 
 static void *border_update_async_proc(void *context) {
-  debug("border_update_async_proc started\n");
   struct {
     struct border *border;
     struct settings settings;
@@ -579,7 +623,6 @@ void border_move(struct border *border) {
 
 void border_update(struct border *border, bool try_async) {
   char *window_title(int cid, uint32_t wid);
-  debug("border_update: cid=%d wid=%d \n", border->cid, border->target_wid);
   pthread_mutex_lock(&border->mutex);
   yb_props_t *prop = table_find(&yb_props, &border->target_wid);
   border->is_floating = prop && prop->is_floating;
@@ -597,9 +640,6 @@ void border_update(struct border *border, bool try_async) {
 
   payload->border = border;
   payload->settings = *settings;
-  if(border->is_floating){
-    // draw_floating_indicator(border);
-  }
   pthread_t thread;
   pthread_create(&thread, NULL, border_update_async_proc, payload);
   pthread_detach(thread);

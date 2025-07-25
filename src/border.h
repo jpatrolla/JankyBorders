@@ -91,9 +91,11 @@ struct border {
   volatile uint32_t external_proxy_wid;
 
   struct settings setting_override;
-
+  uint32_t stack_id;
   int stack_index;
-    struct border *stack_indicator_overlay;
+  int stack_len;
+  bool stack_is_topmost_wid;
+  struct border *stack_indicator_overlay;
 };
 
 struct border* border_create();
@@ -105,4 +107,10 @@ void border_update(struct border* border, bool try_async);
 void border_hide(struct border* border);
 void border_unhide(struct border* border);
 void draw_floating_indicator(struct border *border);
+void draw_sticky_indicator(struct border *border);
+void draw_stack_indicators(struct border *border);
+void border_redraw_all_stacked(struct table *windows);
+void border_clear_stack_state(struct border *b);
 struct settings* border_get_settings(struct border* border);
+
+
