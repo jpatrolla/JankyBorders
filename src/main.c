@@ -21,6 +21,8 @@
 #define MINOR 7
 #define PATCH 0
 
+
+
 pid_t g_pid;
 mach_port_t g_server_port;
 
@@ -28,18 +30,21 @@ struct table g_windows;
 struct mach_server g_mach_server;
 struct settings g_settings = {
     .enabled = true,
-    .active_window = {.stype = COLOR_STYLE_SOLID, .color = 0xffe1e3e4},
+    .active_window = {.stype = COLOR_STYLE_SOLID, .color = 0xffffffff},
     .inactive_window = {.stype = COLOR_STYLE_SOLID, .color = 0x00000000},
     .background = {.stype = COLOR_STYLE_SOLID, .color = 0x00000000},
     .border_width = 4.f,
     .blur_radius = 0,
     .border_style = BORDER_STYLE_ROUND,
-    .hidpi = false,
+    .hidpi = true,
     .show_background = false,
     .border_order = BORDER_ORDER_BELOW,
     .ax_focus = false,
     .blacklist_enabled = false,
     .whitelist_enabled = false,
+    
+    .fade_time      = 0.12f,
+    .fade_out_after = 5.0f,
     //.badges = {.pip = false, .sticky = false, .floating = false, .stack = false, .stack_index=0}
 };
 static TABLE_HASH_FUNC(hash_windows) { return *(uint32_t *)key; }
@@ -154,7 +159,22 @@ static void event_callback(CFMachPortRef port, void *message, CFIndex size,
     event = SLEventCreateNextEvent(cid);
   } while (event);
 }
+static dispatch_source_t g_fade_timer = NULL;
 
+  void borders_start_fade_timer(struct table *windows)
+  {
+      if (g_fade_timer) return;          // already running
+      g_fade_timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0,
+                                            dispatch_get_main_queue());
+      dispatch_source_set_timer(g_fade_timer,
+                                DISPATCH_TIME_NOW,
+                                (uint64_t)(1e9 / 60),   // 60 fps
+                                (uint64_t)(1e6));       // 1 ms leeway
+      dispatch_source_set_event_handler(g_fade_timer, ^{
+          borders_fade_tick(windows);
+      });
+      dispatch_resume(g_fade_timer);
+  }
 int main(int argc, char **argv) {
   if (argc > 1 && ((strcmp(argv[1], VERSION_OPT_LONG) == 0) ||
                    (strcmp(argv[1], VERSION_OPT_SHRT) == 0))) {
@@ -210,14 +230,18 @@ int main(int argc, char **argv) {
   }
 
   windows_add_existing_windows(&g_windows);
+  borders_start_fade_timer(&g_windows);
   //sidebar_init();
   mach_server_begin(&g_mach_server, message_handler);
   if (!update_mask)
     execute_config_file("borders", "bordersrc");
 
+
 #ifdef _YABAI_INTEGRATION
   yabai_register_mach_port(&g_windows);
 #endif
+  
+
   CFRunLoopRun();
   yabai_props_free();
   return 0;

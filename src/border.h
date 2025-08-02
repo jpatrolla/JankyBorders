@@ -5,12 +5,24 @@
 #include "misc/drawing.h"
 #include "animation.h"
 #include "hashtable.h"
+#include <stdint.h>
+#include <CoreText/CoreText.h>
+typedef union {
+    uint32_t value;
+    struct {
+#if __BIG_ENDIAN__
+        uint8_t a, r, g, b;  // adjust depending on platform endianness
+#else
+        uint8_t b, g, r, a;
+#endif
+    };
+} color_t;
 
 #define BORDER_ORDER_ABOVE 1
 #define BORDER_ORDER_BELOW -1
 #define BORDER_STYLE_ROUND  'r'
 #define BORDER_STYLE_SQUARE 's'
-#define BORDER_PADDING 8.0
+#define BORDER_PADDING 20.0
 #define BORDER_TSMN 3.27f
 #define BORDER_TSMW 8.f
 #define BORDER_RADIUS 9.f
@@ -45,6 +57,9 @@ struct settings {
 
   bool whitelist_enabled;
   struct table whitelist;
+
+  float fade_time;        /* duration of fade  (e.g. 0.20) */
+  float fade_out_after;   /* idle timeout (e.g. 5.0)       */
 };
 
 struct event_buffer {
@@ -75,7 +90,7 @@ struct border {
 
   uint64_t sid;
   uint32_t wid;
-  uint32_t target_wid;
+uint32_t target_wid;
 
   CGPoint origin;
   CGRect frame;
@@ -96,7 +111,15 @@ struct border {
   int stack_len;
   bool stack_is_topmost_wid;
   struct border *stack_indicator_overlay;
-};
+
+  /* ───── Fade animation ────────────────────────────── */
+  double   fade_start;    /* monotonic seconds when fade began      */
+  float    fade_value;    /* 0-1: 0 = fully inactive, 1 = fully active */
+  bool     fade_in;       /* true = fading to active, false = to inactive */
+  double   last_focus_ts; /* time of last explicit focus event      */
+  bool  fade_running;
+  bool last_focused;
+  };
 
 struct border* border_create();
 void border_init(struct border *border, int cid);
@@ -112,5 +135,5 @@ void draw_stack_indicators(struct border *border);
 void border_redraw_all_stacked(struct table *windows);
 void border_clear_stack_state(struct border *b);
 struct settings* border_get_settings(struct border* border);
-
+void borders_fade_tick(struct table *windows);
 

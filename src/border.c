@@ -113,7 +113,10 @@ static bool border_calculate_bounds(struct border *border, CGRect *frame,
   }
 
   float border_offset = -settings->border_width - BORDER_PADDING;
+  
   *frame = CGRectInset(window_frame, border_offset, border_offset);
+
+  
 
   
   // adjust for indicators
@@ -121,6 +124,7 @@ static bool border_calculate_bounds(struct border *border, CGRect *frame,
   //   frame->origin.x -= indicator_offset;
   //   frame->size.width += indicator_offset;
   // }
+ 
 
   border->origin = frame->origin;
   frame->origin = CGPointZero;
@@ -128,7 +132,7 @@ static bool border_calculate_bounds(struct border *border, CGRect *frame,
   window_frame.origin = (CGPoint){-border_offset, -border_offset};
   
   border->drawing_bounds = window_frame;
-
+  
   return true;
 }
 
@@ -136,7 +140,9 @@ static void border_draw(struct border *border, CGRect frame,
                         struct settings *settings) {
   debug("border_draw: cid=%d wid=%d\n", border->cid, border->wid);
   struct color_style color_style;
-  color_style.stype = COLOR_STYLE_SOLID;
+  
+
+
   if(border->focused) {
     if(border->is_floating){
         color_style.color = 0xFF0A84FF;
@@ -150,6 +156,30 @@ static void border_draw(struct border *border, CGRect frame,
   if (border->is_sticky){
         color_style.color = 0xFFFF9500;
   }
+  if(border->last_focused){
+    color_style.color = 0xFFFFFFFF; // white
+  }
+  uint32_t active   = color_style.color;
+  uint32_t inactive = settings->inactive_window.color;
+  uint32_t draw_color;
+  float t = border->fade_value;             // 0→1
+  if (border->stack_index > 0) {
+      t = 1.0f;
+  }
+
+  if (border->focused) {
+    draw_color = lerp_rgba(inactive, active, t);
+  } else if(border->last_focused) {
+    draw_color =lerp_rgba(inactive,active, t);
+  } else {
+        /* Normal unfocused window: just inactive */           // 0→1
+        draw_color = inactive;
+  }
+  drawing_set_stroke_and_fill(border->context, draw_color, false);
+  color_style.stype = COLOR_STYLE_SOLID;
+  color_style.color = draw_color;          /* ← single source of truth */
+  bool glow = false;
+
   CGGradientRef gradient = NULL;
   CGPoint gradient_dir[2];
   if (color_style.stype == COLOR_STYLE_SOLID ||
@@ -164,11 +194,13 @@ static void border_draw(struct border *border, CGRect frame,
   }
 
   CGContextSetLineWidth(border->context, settings->border_width);
+  
   CGContextClearRect(border->context, frame);
-
+  
   CGRect path_rect = border->drawing_bounds;
   
   CGMutablePathRef inner_clip_path = CGPathCreateMutable();
+  
   if (settings->border_style == BORDER_STYLE_SQUARE &&
       settings->border_order == BORDER_ORDER_ABOVE &&
       settings->border_width >= BORDER_TSMW) {
@@ -182,8 +214,13 @@ static void border_draw(struct border *border, CGRect frame,
                          CGRectInset(path_rect, 1.0, 1.0), BORDER_INNER_RADIUS,
                          BORDER_INNER_RADIUS);
   }
-  drawing_clip_between_rect_and_path(border->context, frame, inner_clip_path);
 
+  CGContextClearRect(border->context, frame);
+  if (border->is_floating) {
+    draw_floating_indicator(border);
+}
+  drawing_clip_between_rect_and_path(border->context, frame, inner_clip_path);
+  
   if (settings->border_style == BORDER_STYLE_SQUARE) {
     if (color_style.stype == COLOR_STYLE_SOLID ||
         color_style.stype == COLOR_STYLE_GLOW) {
@@ -218,6 +255,8 @@ static void border_draw(struct border *border, CGRect frame,
   }
   // 🟨🟨🟨 floating indicators
   if(border->is_floating || border->is_sticky){
+      CGContextResetClip(border->context);
+
     draw_floating_indicator(border);
   }
   if(border->is_sticky){
@@ -234,35 +273,80 @@ static void border_draw(struct border *border, CGRect frame,
   CGContextFlush(border->context);
   CGContextResetClip(border->context);
   CGContextRestoreGState(border->context);
+  
   SLSFlushWindowContentRegion(border->cid, border->wid, NULL);
- 
 
 }
 
 void draw_floating_indicator(struct border *border) {
   if (!(border->is_floating || border->is_sticky)) return;
-  CGRect bounds = border->drawing_bounds;
+  CGRect path_rect = border->drawing_bounds;
 
-  CGContextSaveGState(border->context);
-  CGRect circleRect = CGRectMake(bounds.size.width, bounds.size.height, 16, 16);
-  if (border->is_floating || border->floating) {
-      CGContextSetRGBFillColor(border->context, 1.0, 1.0, 0.0, 1.0); // yellow
-      CGContextFillEllipseInRect(border->context, circleRect);
-  }
-  CGContextRestoreGState(border->context);
+    path_rect = CGRectInset(border->drawing_bounds, BORDER_TSMN, BORDER_TSMN);
+
+  CGRect bounds = border->drawing_bounds;
+    CGRect shadow = CGRectInset(CGRectOffset(bounds, 10, -10), -2, -2);
+    shadow = CGRectIntegral(shadow);  // avoid subpixel issues
+
+    CGFloat radius = fmin(shadow.size.width, shadow.size.height) / 2.0;
+    radius = fmin(radius, 9.0);  // corner radius
+
+    CGRect borderRect = CGRectInset(path_rect, 1.0, 1.0);
+
+    CGContextSaveGState(border->context);
+    CGContextResetClip(border->context);
+    CGContextClearRect(border->context, border->frame);
+
+    // Create a compound path (outer shadow - inner border hole)
+    CGMutablePathRef shadowPath = CGPathCreateMutable();
+    CGPathAddRoundedRect(shadowPath, NULL, shadow, radius, radius);
+    CGPathAddRoundedRect(shadowPath, NULL, borderRect, BORDER_INNER_RADIUS, BORDER_INNER_RADIUS);
+
+    // Use even-odd rule to "punch out" the middle
+    CGContextAddPath(border->context, shadowPath);
+    CGContextSetRGBFillColor(border->context, 0.0, 0.0, 0.0, 0.7);
+    CGContextEOFillPath(border->context);  // << important!
+
+    CGPathRelease(shadowPath);
+    CGContextRestoreGState(border->context);
 }
 
 void draw_sticky_indicator(struct border *border) {
   if (!border->is_sticky || !border->sticky) return;
-  debug("🟥🟥🟥🟥 drawing sticky  indicators\n");
   CGRect bounds = border->drawing_bounds;
 
+  struct settings *settings = &g_settings;
+  float frame_offset = settings->border_width + BORDER_PADDING;
+
+  float ind_size = 28.0f;
+  float x = 15;
+  float y = bounds.size.height - 12;
   CGContextSaveGState(border->context);
-  CGRect circleRect = CGRectMake(bounds.size.width + 5, bounds.size.height - 32, 16, 16);
-  if (border->is_sticky || border->sticky) {
-      CGContextSetRGBFillColor(border->context, 0.0, 1.0, 0.0, 1.0); // green
-      CGContextFillEllipseInRect(border->context, circleRect);
-  }
+    CGContextResetClip(border->context);
+  CGContextTranslateCTM(border->context, x, y);
+  CGContextRotateCTM(border->context, M_PI_4);
+  CGContextTranslateCTM(border->context, -x, -y);
+
+
+  CFStringRef emoji = CFSTR("📍");
+  CTFontRef font = CTFontCreateWithName(CFSTR("Apple Color Emoji"), ind_size, NULL);
+  const void *keys[] = { kCTFontAttributeName };
+  const void *values[] = { font };
+  CFDictionaryRef attrs = CFDictionaryCreate(NULL, keys, values, 1, NULL, NULL);
+  CFAttributedStringRef attrStr = CFAttributedStringCreate(NULL, emoji, attrs);
+  CTLineRef line = CTLineCreateWithAttributedString(attrStr);
+
+  // Draw the emoji line
+    CGContextSetTextPosition(border->context,x, y);
+  //CGContextSetTextPosition(border->context, x, y);
+    CTLineDraw(line, border->context);
+
+  // Cleanup
+  CFRelease(line);
+  CFRelease(attrStr);
+  CFRelease(attrs);
+  CFRelease(font);
+
   CGContextRestoreGState(border->context);
 }
 
@@ -295,80 +379,56 @@ void border_redraw_all_stacked(struct table *windows)
         }
     }
 }
-
+static inline void unpack_color(color_t color, float *r, float *g, float *b, float *a) {
+    uint32_t v = color.value;
+    *a = ((v >> 24) & 0xFF) / 255.0f;
+    *r = ((v >> 16) & 0xFF) / 255.0f;
+    *g = ((v >> 8)  & 0xFF) / 255.0f;
+    *b = ((v >> 0)  & 0xFF) / 255.0f;
+}
 void draw_stack_indicators(struct border *border) {
   //TODO: styling
   /** TODO:
     [] styling
     [] interaction/on click
     */
-  debug("🟦🟦🟦🟦 drawing stack indicators\n");
   // placeholder for stack indicators
-  if(border->stack_index <= 0) return;
-  debug(" 🤢🤢🤢  \n");
-  uint32_t indicator_y_offset = border->stack_index * 16;
-  debug(" 🟦🟦🟦 indicator_y_offset: %d\n", indicator_y_offset);
-  CGRect bounds = border->drawing_bounds;
+if(border->stack_index <= 0) return;
+bool bactive = border->focused;
+struct settings *settings = &g_settings;
+float frame_offset = settings->border_width + BORDER_PADDING;
+color_t active_color = { .value =  0xFF0A84FF }; // blue
+//color_t active_color = { .value = 0xFFFFFFFF };
+color_t inactive_color = { .value = 0x99CCFFFF }; // light blue
+//color_t inactive_color = { .value = 0x99FFFFFF }; // 10% transparent white
+float ind_height = 32.f;
+float ind_width = 6.f;
+float ind_gap = 2.0f;
+float ind_y_offset = border->stack_index * (ind_height + ind_gap);
+float ind_radius = 0;
+float ind_x_offset = 0;  // offset from the right edge OR gap between border and indicator
+CGRect bounds = border->drawing_bounds;
+float x_pos = ( frame_offset  - ind_width   ) - ind_x_offset;
+float y_pos = (bounds.size.height + frame_offset) - ind_y_offset - 28;
 
-  CGContextSaveGState(border->context);
-  CGRect circleRect = CGRectMake(-5, bounds.size.height - indicator_y_offset, 16, 16);
-  if(border->stack_is_topmost_wid){
-      CGContextSetRGBFillColor(border->context, 0.0, 0.0, 1.0, 1.0); // blue
-  } else {
-       CGContextSetRGBFillColor(border->context, 1.0, 1.0, 0.0, 1.0); // yellow
-  }
-     
-      CGContextFillEllipseInRect(border->context, circleRect);
+CGRect rect = CGRectMake(x_pos, y_pos,  ind_width, ind_height);
+CGContextSaveGState(border->context);
 
-  CGContextRestoreGState(border->context);
+CGPathRef path = CGPathCreateWithRoundedRect(rect, ind_radius, ind_radius, NULL);
+CGContextAddPath(border->context, path);
 
-  //if (border->stack_index > 1) {
-  //  path_rect.origin.x +=
-  //      indicator_offset; // shift right by 10 to realign the left clip edge
-  //  path_rect.size.width += indicator_offset;
-  //}
-  //// ⚠️ stack indicator WIP
-  //  if (border->stack_index > 1) {
-  //    CGContextSaveGState(border->context);
-  //    CGFloat indicator_offset = 50;
-  //    CGFloat indicator_size = 20;
-  //    CGFloat y = (frame.size.height / 2) - (indicator_size / 2);
-  //    drawing_draw_filled_circle(
-  //        border->context,
-  //    CGRectMake((indicator_offset / 2), y, indicator_size, indicator_size),
-  //    0xffff0000);
-  //    CGContextSetRGBFillColor(border->context, 1, 1, 1, 0.5);
-  //    CGContextFillRect(border->context,s
-  //                      CGRectMake(0, 0, frame.size.width, frame.size.height));
+float r, g, b, a;
+if (border->stack_is_topmost_wid) {
+    unpack_color(active_color, &r, &g, &b, &a);
+} else {
+    unpack_color(inactive_color, &r, &g, &b, &a);
+}
+CGContextSetRGBFillColor(border->context, r, g, b, a);
 
-  //    // if (!border->stack_indicator_overlay) {
-  //    //   border->stack_indicator_overlay = malloc(sizeof(struct border));
-  //    //   border_init(border->stack_indicator_overlay, border->cid);
-  //    //   CGRect overlay_rect = CGRectMake(0, 0, 20, 20);
-  //    //   border_create_window(border->stack_indicator_overlay, overlay_rect,
-  //    //   true,
-  //    //                        false);
-  //    // }
-  //    // CGFloat dot_size = 6.0;
-  //    // CGFloat x = frame.size.width - dot_size - 3;
-  //    // CGFloat y = frame.size.height / 2 - dot_size / 2;
+CGContextFillPath(border->context);
+CGPathRelease(path);
+CGContextRestoreGState(border->context);
 
-  //    // CGContextSaveGState(border->context);
-  //    // drawing_set_fill(border->context, 0xffff0000);
-  //    // CGContextFillEllipseInRect(border->context,
-  //    //                            CGRectMake(x, y, dot_size, dot_size));
-  //    // CGContextRestoreGState(border->context);
-
-  //    // CGRect overlay_frame =
-  //    //     CGRectMake(border->target_bounds.origin.x - 5,
-  //    //                border->target_bounds.origin.y + 5, 20, 20);
-  //    // border->stack_indicator_overlay->target_bounds = overlay_frame;
-  //    // border_update_internal(border->stack_indicator_overlay, settings);
-
-  //  } else if (border->stack_indicator_overlay) {
-  //    border_destroy(border->stack_indicator_overlay);
-  //    border->stack_indicator_overlay = NULL;
-  //  }
 }
 
 void border_create_window(struct border *border, CGRect frame, bool unmanaged,
@@ -377,6 +437,7 @@ void border_create_window(struct border *border, CGRect frame, bool unmanaged,
   pthread_mutex_lock(&border->mutex);
   int cid = border->cid;
   border->wid = window_create(cid, frame, hidpi, unmanaged);
+  
   border->frame = frame;
   border->needs_redraw = true;
   border->context = SLWindowContextCreate(cid, border->wid, NULL);
@@ -418,13 +479,14 @@ void border_update_internal(struct border *border, struct settings *settings) {
     border_hide(border);
     return;
   }
-
+  
   int level = window_level(cid, border->target_wid);
   int sub_level = window_sub_level(border->target_wid);
 
-  if (!border->wid)
+  if (!border->wid){
     border_create_window(border, frame, border->is_proxy, settings->hidpi);
-  
+  }
+
   bool disabled_update = false;
   if (!CGRectEqualToRect(frame, border->frame)) {
     
@@ -433,14 +495,20 @@ void border_update_internal(struct border *border, struct settings *settings) {
       return;
 
     CFTypeRef frame_region;
+    //if(border->is_floating){
+    //  frame.origin.x -= 100;
+    //  frame.size.width += 100;
+    //}
     CGSNewRegionWithRect(&frame, &frame_region);
     SLSTransactionOrderWindow(transaction, border->wid, 0, border->target_wid);
     SLSTransactionSetWindowShape(transaction, border->wid, -9999, -9999,
                                  frame_region);
     CFRelease(frame_region);
+    
     border->needs_redraw = true;
     border->frame = frame;
     disabled_update = true;
+   
     SLSDisableUpdate(cid);
     SLSTransactionCommit(transaction, 0);
     CFRelease(transaction);
@@ -479,18 +547,12 @@ void border_update_internal(struct border *border, struct settings *settings) {
     set_tags |= WINDOW_TAG_STICKY;
     clear_tags |= (1ULL << 45);
   }
-  
-  // TEST
-    //CGFloat x = frame.size.width;
-    //CGFloat y = frame.size.height;
-    //CGContextSetRGBFillColor(border->context, 1, 1, 1, 0.5);
-    //CGContextFillRect(border->context, CGRectMake(0, 0, frame.size.width, frame.size.height));
-    //CGContextRestoreGState(border->context);
-
+   
   SLSSetWindowTags(cid, border->wid, &set_tags, 0x40);
   SLSClearWindowTags(cid, border->wid, &clear_tags, 0x40);
   if (disabled_update)
     SLSReenableUpdate(cid);
+  
 }
 
 static void *border_update_async_proc(void *context) {
@@ -513,12 +575,18 @@ void border_init(struct border *border, int cid) {
   pthread_mutexattr_settype(&mattr, PTHREAD_MUTEX_RECURSIVE);
   pthread_mutex_init(&border->mutex, &mattr);
   animation_init(&border->animation);
-  if (cid)
-    border->cid = cid;
-  else
-    border->cid = SLSMainConnectionID();
-}
 
+
+  if (cid){
+    border->cid = cid;
+    border->fade_value = 0.0f;
+    border->fade_start = 0.0;
+    border->fade_in    = false;
+    border->last_focus_ts = 0.0;
+  } else {
+    border->cid = SLSMainConnectionID();
+  }
+}
 struct border *border_create() {
   struct border *border = malloc(sizeof(struct border));
   int cid = 0;
@@ -558,6 +626,65 @@ static void border_destroy_async(void *context) {
     free(border);
 }
 
+static inline float ease_out_cubic(float t)
+{
+    return 1.0f - powf(1.0f - t, 3.0f);   // t in [0,1]
+}
+static inline float smoothstep(float t)
+{
+    return t*t*(3 - 2*t);
+
+}
+void borders_fade_tick(struct table *windows)
+{
+    if (!windows || windows->count == 0) return;
+
+    double now       = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW_APPROX) / 1e9;
+    float  fade_time = 0.15f;         /* seconds  */
+    float  idle_out  = 2.0f;    /* seconds  */
+    bool idle_out_enabled = false;
+    for (int i = 0; i < windows->capacity; ++i) {
+        struct bucket *bucket = windows->buckets[i];
+        while (bucket) {
+            struct border *b = bucket->value;
+
+            if (b->fade_running &&( b->focused || b->last_focused)){
+                double dt = now - b->fade_start;
+                float t_linear = fminf(dt / fade_time, 1.0f);
+                float t_eased  = ease_out_cubic(t_linear);
+
+                b->fade_value = b->fade_in ? t_eased         
+                                          : 1.0f - t_linear;
+                if (dt >= fade_time) {             
+                    b->fade_running = false;
+                    b->fade_start   = 0.0;
+                    b->fade_value   = b->fade_in ? 1.0f : 0.0f;
+                    b->last_focused = false;
+                    if (!b->fade_in && b->focused) {
+                      b->last_focus_ts = now + 999999;  // ensure we don’t retrigger
+                  }
+                }
+                border_update(b, true);
+            }
+
+            if (idle_out_enabled && idle_out > 0 &&
+                b->focused &&               /* still the focused window   */
+                !b->fade_running &&         /* not already animating      */
+                (now - b->last_focus_ts) > idle_out)
+            {
+                debug("⏰⏰⏰ idle fade‑out start (wid:%u)\n", b->wid);
+                b->fade_in      = false;    /* fade toward inactive       */
+                b->fade_start   = now;
+                b->fade_value   = 1.0f;     /* start at fully‑active      */
+                /* keep last_focused = false — this is *current* focus */
+                b->fade_running = true;     /* start animation            */
+                border_update(b, true);     /* schedule first repaint     */
+            }
+
+            bucket = bucket->next;
+        }
+    }
+}
 void border_destroy(struct border *border)
 {
     /* ①  Return immediately if we’ve already queued a destroy */

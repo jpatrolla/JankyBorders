@@ -45,6 +45,7 @@ static inline uint64_t window_tags(int cid, uint32_t wid) {
 }
 
 static inline uint32_t get_front_window(int cid) {
+  debug("get_front_window: cid: %d\n", cid);
   uint32_t wid = 0;
   uint64_t active_sid = get_active_space_id(cid);
   debug("Active space id: %d\n", active_sid);

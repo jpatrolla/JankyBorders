@@ -17,6 +17,7 @@ static inline bool ax_check_trust(bool silent) {
 }
 
 static inline uint32_t ax_get_front_window(int cid) {
+  debug("ax_get_front_window: cid=%d\n", cid);
   if (!g_ax_trust && !ax_check_trust(false))
     error("In order to use 'ax_focus=on', the process must be trusted with"
           " accessibility permissions.\n");

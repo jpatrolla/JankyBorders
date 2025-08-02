@@ -188,20 +188,35 @@ static bool windows_window_focus(struct table *windows, uint32_t wid) {
       if (bucket->value) {
         struct border *border = bucket->value;
         yb_props_t *prop = table_find(&yb_props, &wid);
-        if (border->focused && border->target_wid != wid) { 
+        double now = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW_APPROX) / 1e9;
+
+        // previous focused window
+
+        if (border->focused &&  border->target_wid != wid) { 
           border->focused = false;
           border->needs_redraw = true;
           border->is_floating = prop && prop->is_floating;
+          border->fade_in      = false;
+          border->fade_value   = 1.0f;
+          border->last_focused = true;
           border_update(border, true);
-        }
-
+          debug("🟥 Border %d, cid: %d, target_wid: %d, unfocused\n", border->wid, border->cid, border->target_wid);
+        } 
         if (!border->focused && border->target_wid == wid) {
           border->focused = true;
           border->needs_redraw = true;
           border->is_floating = prop && prop->is_floating;
+          border->fade_in      = true;
+          border->fade_value   = 0.0f;
+          border->last_focused = false;
           border_update(border, true);
+          debug("🟩 Border %d, cid: %d, target_wid: %d, focused\n", border->wid, border->cid, border->target_wid);
         }
-        
+        border->fade_start   = now;
+        border->fade_running = true;
+        border->last_focus_ts = now;   /* always refresh on focus change */
+        border->needs_redraw = true;
+
         if (border->target_wid == wid)
           found_window = true;
 
