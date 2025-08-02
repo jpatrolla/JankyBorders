@@ -298,11 +298,13 @@ static void yabai_message(CFMachPortRef port, void *data, CFIndex size, void *ct
                         debug("🟨🟨 WID: %d\n", wid);
                         pthread_mutex_lock(&b->mutex);
                         p->is_floating          = val;
-                        if (b) b->is_floating   = val;
+                        if (b){ 
+                            b->is_floating   = val;
+                        }
                         pthread_mutex_unlock(&b->mutex);
                         break;       
                 }
-                // if (b) { b->needs_redraw = true; border_update(b, true); }
+                if (b) { b->needs_redraw = true; border_update(b, true); }
             }
             break;
         }

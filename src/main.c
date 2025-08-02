@@ -43,7 +43,8 @@ struct settings g_settings = {
     .blacklist_enabled = false,
     .whitelist_enabled = false,
     
-    .fade_time      = 0.12f,
+    .fade_in_time   = 0.18f,
+    .fade_out_time  = 0.5f,
     .fade_out_after = 5.0f,
     //.badges = {.pip = false, .sticky = false, .floating = false, .stack = false, .stack_index=0}
 };

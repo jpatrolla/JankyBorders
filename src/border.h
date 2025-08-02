@@ -58,8 +58,9 @@ struct settings {
   bool whitelist_enabled;
   struct table whitelist;
 
-  float fade_time;        /* duration of fade  (e.g. 0.20) */
-  float fade_out_after;   /* idle timeout (e.g. 5.0)       */
+  float fade_in_time;     /* duration of fade‑in  (e.g. 0.20) */
+  float fade_out_time;    /* duration of fade‑out (e.g. 0.20) */
+  float fade_out_after;   /* idle timeout before auto‑fade (e.g. 5.0) */
 };
 
 struct event_buffer {
@@ -114,9 +115,12 @@ uint32_t target_wid;
 
   /* ───── Fade animation ────────────────────────────── */
   double   fade_start;    /* monotonic seconds when fade began      */
+  uint64_t fade_start_ns;  /* clock timestamp when this fade began */
   float    fade_value;    /* 0-1: 0 = fully inactive, 1 = fully active */
   bool     fade_in;       /* true = fading to active, false = to inactive */
   double   last_focus_ts; /* time of last explicit focus event      */
+  uint64_t last_fade_ns;  /* monotonic nanoseconds of last fade redraw */
+  uint64_t fade_accumulator_ns; /* accumulated nanoseconds for missed frames */
   bool  fade_running;
   bool last_focused;
   };

@@ -192,34 +192,42 @@ static bool windows_window_focus(struct table *windows, uint32_t wid) {
 
         // previous focused window
 
-        if (border->focused &&  border->target_wid != wid) { 
-          border->focused = false;
-          border->needs_redraw = true;
-          border->is_floating = prop && prop->is_floating;
+        if (border->focused &&  border->target_wid != wid) {
+          /* ← window just LOST focus → start fade‑out */
+          border->focused      = false;
+          border->is_floating  = prop && prop->is_floating;
           border->fade_in      = false;
           border->fade_value   = 1.0f;
           border->last_focused = true;
-          border_update(border, true);
-          debug("🟥 Border %d, cid: %d, target_wid: %d, unfocused\n", border->wid, border->cid, border->target_wid);
-        } 
-        if (!border->focused && border->target_wid == wid) {
-          border->focused = true;
+
+          border->fade_start   = now;
+          border->fade_running = true;
           border->needs_redraw = true;
-          border->is_floating = prop && prop->is_floating;
+          border_update(border, true);
+          debug("🟥 Border %d unfocused\n", border->wid);
+        }
+
+        if (!border->focused && border->target_wid == wid) {
+          /* ← window just GAINED focus → start fade‑in */
+          border->focused      = true;
+          border->is_floating  = prop && prop->is_floating;
           border->fade_in      = true;
           border->fade_value   = 0.0f;
           border->last_focused = false;
+
+          border->fade_start   = now;
+          border->fade_running = true;
+          border->needs_redraw = true;
           border_update(border, true);
-          debug("🟩 Border %d, cid: %d, target_wid: %d, focused\n", border->wid, border->cid, border->target_wid);
+          debug("🟩 Border %d focused\n", border->wid);
         }
-        border->fade_start   = now;
-        border->fade_running = true;
-        border->last_focus_ts = now;   /* always refresh on focus change */
-        border->needs_redraw = true;
 
-        if (border->target_wid == wid)
+        // Do not set fade_start/fade_running/needs_redraw unconditionally here!
+        // Only update last_focus_ts for the window gaining focus.
+        if (border->target_wid == wid) {
+          border->last_focus_ts = now;   /* always refresh on focus change */
           found_window = true;
-
+        }
       }
       bucket = bucket->next;
     }

@@ -140,44 +140,29 @@ static void border_draw(struct border *border, CGRect frame,
                         struct settings *settings) {
   debug("border_draw: cid=%d wid=%d\n", border->cid, border->wid);
   struct color_style color_style;
-  
-
-
-  if(border->focused) {
-    if(border->is_floating){
-        color_style.color = 0xFF0A84FF;
-    } else {
-        color_style = settings->active_window;
-    }
-    
-  } else {
-    color_style = settings->inactive_window;
-  }
-  if (border->is_sticky){
-        color_style.color = 0xFFFF9500;
-  }
-  if(border->last_focused){
-    color_style.color = 0xFFFFFFFF; // white
-  }
-  uint32_t active   = color_style.color;
-  uint32_t inactive = settings->inactive_window.color;
   uint32_t draw_color;
   float t = border->fade_value;             // 0→1
   if (border->stack_index > 0) {
       t = 1.0f;
   }
 
+  uint32_t active = 0xFFFFFFFF; // white
+  uint32_t inactive = 0x00000000; // transparent
+
+  bool fading_out = (!border->focused && border->fade_running && !border->fade_in);
+
   if (border->focused) {
-    draw_color = lerp_rgba(inactive, active, t);
-  } else if(border->last_focused) {
-    draw_color =lerp_rgba(inactive,active, t);
+    draw_color = lerp_rgba(inactive, active, t);      /* fade‑IN */
+  } else if (fading_out) {
+    draw_color = lerp_rgba(inactive, active, t);      /* fade‑OUT */
   } else {
-        /* Normal unfocused window: just inactive */           // 0→1
-        draw_color = inactive;
+    draw_color = inactive;                            /* fully inactive */
   }
-  drawing_set_stroke_and_fill(border->context, draw_color, false);
+  
   color_style.stype = COLOR_STYLE_SOLID;
   color_style.color = draw_color;          /* ← single source of truth */
+  drawing_set_stroke_and_fill(border->context, draw_color, false);
+
   bool glow = false;
 
   CGGradientRef gradient = NULL;
@@ -195,7 +180,7 @@ static void border_draw(struct border *border, CGRect frame,
 
   CGContextSetLineWidth(border->context, settings->border_width);
   
-  CGContextClearRect(border->context, frame);
+  // CGContextClearRect(border->context, frame);
   
   CGRect path_rect = border->drawing_bounds;
   
@@ -583,6 +568,7 @@ void border_init(struct border *border, int cid) {
     border->fade_start = 0.0;
     border->fade_in    = false;
     border->last_focus_ts = 0.0;
+    border->last_fade_ns = 0;
   } else {
     border->cid = SLSMainConnectionID();
   }
@@ -633,14 +619,17 @@ static inline float ease_out_cubic(float t)
 static inline float smoothstep(float t)
 {
     return t*t*(3 - 2*t);
-
+}
+static inline float ease_in_cubic(float t) {
+    return t < 0.5f
+         ? 4.0f * t*t*t
+         : 1.0f - powf(-2.0f*t + 2.0f, 3.0f) / 2.0f;
 }
 void borders_fade_tick(struct table *windows)
 {
     if (!windows || windows->count == 0) return;
 
     double now       = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW_APPROX) / 1e9;
-    float  fade_time = 0.15f;         /* seconds  */
     float  idle_out  = 2.0f;    /* seconds  */
     bool idle_out_enabled = false;
     for (int i = 0; i < windows->capacity; ++i) {
@@ -650,11 +639,17 @@ void borders_fade_tick(struct table *windows)
 
             if (b->fade_running &&( b->focused || b->last_focused)){
                 double dt = now - b->fade_start;
+                float fade_time = b->fade_in
+                                  ? g_settings.fade_in_time
+                                  : g_settings.fade_out_time;
                 float t_linear = fminf(dt / fade_time, 1.0f);
-                float t_eased  = ease_out_cubic(t_linear);
-
-                b->fade_value = b->fade_in ? t_eased         
-                                          : 1.0f - t_linear;
+                float u = fminf(dt / fade_time, 1.0f);
+                // apply cubic ease-in for fade-in, linear fade-out for consistency
+                if (b->fade_in) {
+                    b->fade_value = ease_in_cubic(u) * (b->fade_in ? 1.0f : -1.0f) + (b->fade_in ? 0.0f : 1.0f);
+                } else {
+                    b->fade_value = 1.0f - t_linear;
+                }
                 if (dt >= fade_time) {             
                     b->fade_running = false;
                     b->fade_start   = 0.0;
@@ -664,22 +659,34 @@ void borders_fade_tick(struct table *windows)
                       b->last_focus_ts = now + 999999;  // ensure we don’t retrigger
                   }
                 }
-                border_update(b, true);
+                /* Throttle redraws: at most 60 FPS */
+                uint64_t now_ns = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW_APPROX);
+                if (now_ns - b->last_fade_ns >= (1000000000ULL / 60)) {
+                    b->last_fade_ns = now_ns;
+                    border_update(b, /*try_async=*/true);
+                }
             }
 
-            if (idle_out_enabled && idle_out > 0 &&
-                b->focused &&               /* still the focused window   */
-                !b->fade_running &&         /* not already animating      */
-                (now - b->last_focus_ts) > idle_out)
-            {
-                debug("⏰⏰⏰ idle fade‑out start (wid:%u)\n", b->wid);
-                b->fade_in      = false;    /* fade toward inactive       */
-                b->fade_start   = now;
-                b->fade_value   = 1.0f;     /* start at fully‑active      */
-                /* keep last_focused = false — this is *current* focus */
-                b->fade_running = true;     /* start animation            */
-                border_update(b, true);     /* schedule first repaint     */
-            }
+            // if (idle_out_enabled && idle_out > 0 &&
+            //     b->focused &&               /* still the focused window   */
+            //     !b->fade_running &&         /* not already animating      */
+            //     (now - b->last_focus_ts) > idle_out)
+            // {
+            //     debug("⏰⏰⏰ idle fade‑out start (wid:%u)\n", b->wid);
+            //     b->fade_in      = false;    /* fade toward inactive       */
+            //     b->fade_start   = now;
+            //     b->fade_value   = 1.0f;     /* start at fully‑active      */
+            //     /* keep last_focused = false — this is *current* focus */
+            //     b->fade_running = true;     /* start animation            */
+            //     uint64_t now_ns = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW_APPROX);
+            //     if (b->fade_running && (b->focused || b->last_focused)) {
+            //         // only redraw if at least 1/60th of a second has passed
+            //         if (now_ns - b->last_fade_ns >= (1000000000ULL / 60)) {
+            //             b->last_fade_ns = now_ns;
+            //         }
+            //     }
+            //     border_update(b, /*try_async=*/false);
+            // }
 
             bucket = bucket->next;
         }
